@@ -1,12 +1,10 @@
 # Onigiri Shop — Inventory Management System
 
-**BTM 495 / JMSB | Python command-line proof of concept | V2 user guide**
-
-This program is a menu-driven inventory and ordering prototype for an Onigiri shop. It is based on the project's Inventory Management Use Case #1, CRC cards, inventory class diagram and activity diagram. The prototype supports ingredient tracking, recipes, customer orders, automatic stock deductions, low-stock alerts, purchase orders, supplier deliveries and a saved history of inventory changes.
+This Python application provides a menu-driven system for managing inventory and orders at an Onigiri shop. It supports ingredients, recipes, customer orders, automatic stock deductions, low-stock alerts, purchase orders, supplier deliveries, and inventory transaction history.
 
 **The database is persistent.** Data is stored in a local SQLite file named `btm495.db`. The application creates that file **only if it does not already exist**. On subsequent launches, it reads and updates the same file; it does not wipe the database on startup. You do **not** need to run the original `database.py` or `main.py` to use this application.
 
-> **Important:** The reset and restore options *do* replace the active database, but only when an Owner selects and confirms those actions. Every reset creates a backup first. If your group's loyalty, payroll or accounting modules share this SQLite file, read [Section 8](#8-demo-data-backups-resets-and-restore) before performing a reset.
+> **Important:** The reset and restore options *do* replace the active database, but only when an Owner selects and confirms those actions. Every reset creates a backup first. If other applications or modules share this SQLite file, read [Section 8](#8-sample-data-backups-resets-and-restore) before performing a reset.
 
 ---
 
@@ -29,9 +27,9 @@ If that command is not recognized, try `python --version`. On macOS or Linux, us
 
 ## 2. Install and launch
 
-### Windows — easiest method
+### Windows — launcher
 
-1. Download the provided application ZIP and extract **all of its files** to a permanent folder, for example `Documents\OnigiriInventory`.
+1. Clone or download the repository, or extract all application files to a permanent folder such as `Documents\OnigiriInventory`.
 2. Open the extracted folder and double-click **`START_HERE.bat`**.
 3. A command window will open, initialize or connect to the database, and display the setup/login screen.
 4. Follow the on-screen prompts. When you finish, choose **`0 — Exit`**.
@@ -78,7 +76,7 @@ python3 inventory_cli.py
 | `START_HERE.bat` | Windows double-click launcher | No |
 | `README.md` | This setup and menu guide | Read this |
 | `test_inventory.py` | Automated inventory feature tests | Optional |
-| `test_demo_tools.py` | Automated demo/backup/reset tests | Optional |
+| `test_demo_tools.py` | Automated sample data, backup and reset tests | Optional |
 | `btm495.db` | **Your saved database, created automatically on first run** | **Keep it** |
 | `backups/` | Dated database backups, created when needed | **Keep it** |
 
@@ -114,7 +112,7 @@ Enter `exit` at the username prompt to close the application without signing in.
 
 Both roles can use the inventory and ordering menus. Only an **Owner** can create accounts or open **16 — Demo / backup / reset**. Be careful when adding another Owner: that person can also reset and restore the database.
 
-> The login module is intended for a classroom prototype. It does not yet include password recovery, user deactivation, network accounts or production-grade session management. If the credentials are lost, restoring a known backup or creating a new setup database may be necessary.
+> Account recovery and user deactivation are not available in this version. If credentials are lost, restoring a known backup or starting with a new database may be necessary.
 
 ## 4. Main menu reference
 
@@ -137,7 +135,7 @@ After a successful login, the menu stays open in a loop. Type an option number a
 | **13** | View transaction history | Lists the most recent inventory transactions, including manual changes and order deductions. |
 | **14** | Manage suppliers | Lists suppliers and allows you to add one with contact information. |
 | **15** | Manage users (**Owner only**) | Lists accounts and creates new Employee or Owner users. |
-| **16** | Demo / backup / reset (**Owner only**) | Populates sample data, creates backups, resets the database or restores a backup. |
+| **16** | Demo / backup / reset (**Owner only**) | Loads sample data, creates backups, resets the database or restores a backup. |
 | **17** | Log out | Returns to the username/password login screen. |
 | **0** | Exit | Closes the program without deleting saved data. |
 
@@ -226,7 +224,7 @@ If the order requires more of **any** ingredient than you have available, the co
 
 **Example:** If one Tuna Mayo Onigiri uses 120 g of rice, 1 nori sheet, 55 g of tuna, 20 g of mayonnaise and 1 wrapper, completing an order for **two** uses **240 g of rice, 2 sheets, 110 g of tuna, 40 g of mayonnaise and 2 wrappers**. The menu item’s recipe defines these requirements.
 
-Option **9** also allows you to **cancel** a Pending prototype order using `x`; a cancelled order does not deduct inventory. External orders from other systems that have no recipe lines cannot be completed through this menu.
+Option **9** also allows you to **cancel** a Pending order using `x`; a cancelled order does not deduct inventory. External orders from other systems that have no recipe lines cannot be completed through this menu.
 
 ## 7. Suppliers, purchase orders and deliveries (options 5, 11, 12 and 14)
 
@@ -261,23 +259,23 @@ Use **12 — View inventory purchase orders** to see each purchase order and its
 
 Use **13 — View transaction history** to review the **40 most recent** inventory movements, newest first. Adding stock records a positive change; deductions record a negative change. Transaction types include Opening Stock, Manual Adjustment, Supplier Delivery and Customer Order.
 
-## 8. Demo data, backups, resets and restore
+## 8. Sample data, backups, resets and restore
 
 **Option 16 is available to Owners only.** It opens its own sub-menu:
 
 | Sub-option | Action | What is saved or replaced? |
 |---|---|---|
-| **1 — Populate an EMPTY inventory** | Adds the prepared Onigiri Shop scenario without first replacing the database. | **Adds demo records**; rejects existing inventory/demo data to avoid duplicates. |
+| **1 — Populate an EMPTY inventory** | Adds the prepared Onigiri Shop scenario without first replacing the database. | **Adds sample records**; rejects existing inventory/sample data to avoid duplicates. |
 | **2 — Create backup** | Copies the current database to `backups/`. | **Does not change** the active database. |
-| **3 — Backup + reset + fresh demo** | Creates a backup, clears the live database and loads the original demonstration scenario. | **Preserves Owner/Employee login accounts**; replaces business tables. Best for repeated demos. |
+| **3 — Backup + reset + sample data** | Creates a backup, clears the live database and loads the supplied sample dataset. | **Preserves Owner/Employee login accounts**; replaces business tables. Use when a consistent starting dataset is needed. |
 | **4 — Backup + reset empty** | Creates a backup and prepares a blank set of business tables. | **Preserves login accounts**; business records are cleared. |
 | **5 — Restore a previous backup** | Lists backups, allows you to choose one and backs up the current state before restoring. | Replaces the **entire** live database with the selected backup, including accounts and unrelated tables. |
 | **6 — Backup + factory reset** | Backs up the current database and clears everything. | Also **removes all accounts**; the next startup asks you to create a new Owner. |
 | **0 — Back** | Returns to the main menu. | No changes. |
 
-### What the sample shop contains
+### Included sample data
 
-The included demo scenario provides:
+The sample dataset includes:
 
 - **14 ingredients**, with quantities and individually defined reorder levels.
 - **7 recipes:** Tuna Mayo, Salmon, Umeboshi, Teriyaki Tofu, Cucumber Sesame, Spicy Tuna and Plain Onigiri.
@@ -286,9 +284,9 @@ The included demo scenario provides:
 - **1 partially received inventory purchase order**, with its remaining quantities.
 - Inventory transactions and **3 initial low-stock alerts**.
 
-All shop quantities, supplier contacts and menu prices are **fictional and intended only for a demonstration**.
+All sample quantities, supplier contacts and menu prices are fictional.
 
-**First demo after creating an account:** choose **16 → 1** if the inventory is completely empty. If you have already been experimenting or loaded sample records, use **16 → 3** to recreate the scenario from a clean starting point.
+**To load sample data:** choose **16 → 1** when the inventory is empty. To clear existing business data and reload the same sample dataset, use **16 → 3**. This resets the entire shared database, so back up or coordinate with any other applications using it first.
 
 ### Where backups go
 
@@ -319,9 +317,9 @@ For reset options **3, 4 or 6**, the application:
 5. Builds and checks the replacement database, and swaps it into place.
 6. Returns you to the login screen. Options 3 and 4 use your existing account; option 6 requires new first-time Owner setup.
 
-**Reset is broader than the inventory module.** If other teammates have stored payroll, loyalty, accounting or analytics data in the same SQLite file, these records/tables **will not be present in the fresh active database** after a reset. They remain in the dated backup. Do **not** reset a shared project database without checking with your teammates first.
+**Reset is broader than the inventory module.** If payroll, loyalty, accounting or analytics data is stored in the same SQLite file, those records and tables **will not be present in the fresh active database** after a reset. They remain in the dated backup. Do not reset a shared database without coordinating with other users or applications relying on it.
 
-**Close other programs using `btm495.db` before resetting or restoring**, including database browser applications, other Python processes, or other group modules. Keep an additional offline copy of any important project data.
+**Close other programs using `btm495.db` before resetting or restoring**, including database browser applications, or other Python applications. Keep an additional offline copy of any important project data.
 
 ### Restore procedure
 
@@ -333,24 +331,9 @@ For reset options **3, 4 or 6**, the application:
 
 Restoring a backup also restores its *old* inventory quantities, customer orders, supplier orders, alerts and other database tables. It replaces changes made after that backup was captured (which remain available in the automatic before-restore backup).
 
-## 9. Suggested classroom demonstration (about 5–10 minutes)
+## 9. Existing databases and integration
 
-1. **Sign in as Owner.** Explain the user roles and persistent SQLite database.
-2. **Start fresh:** choose **16 → 3**, confirm `RESET`, enter your password, and log in again. Alternatively use **16 → 1** on an empty database.
-3. **Show inventory:** choose **1**. Point out the current quantities, units, reorder levels and LOW statuses. Demo data starts with Sushi Rice at **1,130 g** against a **1,200 g** threshold.
-4. **Change a threshold:** choose **3**, select an ingredient and adjust its reorder level. Show how this affects LOW/OK status and alerts.
-5. **Show recipes:** choose **7**, inspect Tuna Mayo Onigiri and explain ingredient quantities per serving.
-6. **Create a customer order:** choose **8**, add one or more onigiri recipes and complete the order. Show the updated stock from **1** and the transaction records from **13**.
-7. **Check alerts:** choose **10**, select an active low-stock alert and mark it Reviewed.
-8. **Create a purchase order:** choose **11** and order a low-stock ingredient. Show it in **12**; explain that a purchase order by itself does not change stock.
-9. **Receive stock:** choose **5**, link the delivery to the purchase order, receive some or all of its items, then reopen **1**, **10** and **12** to show the new quantities, alerts and order status.
-10. **Demonstrate persistence:** choose **0**, start the application again, sign back in and reopen **1** to confirm the saved quantities are still present.
-
-To repeat this demonstration later, use **16 → 3** again. It creates another backup before restoring the starting demo scenario.
-
-## 10. Existing databases and broader-system integration
-
-The program is designed to share key tables with your team's broader JMSB application rather than requiring an entirely separate data model.
+The application can share key tables with an existing SQLite-based system instead of requiring a separate database.
 
 | Inventory concept | SQLite table(s) | Purpose |
 |---|---|---|
@@ -370,36 +353,13 @@ The `RecipeIngredient` table stores the amount of an ingredient needed for one s
 1. **Make a separate copy of the database before connecting it.**
 2. Put the application's `.py` files alongside that `btm495.db`, or carefully arrange for `inventory_db.py` to point to your intended database location.
 3. Run `inventory_cli.py` normally. It will use the existing file and add its missing inventory-supporting columns and tables as needed, without resetting it on startup.
-4. Test the connection using a **copy** of your real database first, especially if a teammate changed the supplied database schema.
+4. Test the connection using a **copy** of your real database first, especially if its existing schema differs from the supplied tables.
 
 **Caution:** The database path is based on the folder containing `inventory_db.py`, **not** whatever folder your terminal happens to be in. If you accidentally run a second copy of the application from another extracted folder, it may create a second `btm495.db` there. Always run the correct copy.
 
-The broader class diagram includes loyalty, payroll, analytics and accounting. Those features are **not functional modules in this command-line application**. Likewise, updating an external order's status with raw SQL does **not** automatically deduct its ingredients. The broader ordering system should call `InventoryService.complete_customer_order()` (with suitable recipe lines and a valid user ID) when completing a customer order.
+Loyalty, payroll, analytics and accounting are **not included as functional modules in this application**. Updating an external order's status with raw SQL does **not** automatically deduct its ingredients. An external ordering system should call `InventoryService.complete_customer_order()` (with recipe lines and a valid user ID) when completing a customer order.
 
-### Future GUI conversion
-
-The system already separates its interface from the business logic:
-
-```text
-inventory_cli.py        <- current command-line interface
-        |
-        v
-inventory_service.py    <- user, inventory, recipe and order operations
-        |
-        v
-inventory_db.py         <- SQLite setup and connections
-        |
-        v
-btm495.db               <- persistent database file
-
-Future GUI (Tkinter / CustomTkinter)
-        |
-        +----> inventory_service.py (same business functions)
-```
-
-This separation should allow a GUI to replace the menu without rewriting all the database and inventory calculations. Production deployment would still require more work on authorization, security and integration.
-
-## 11. Troubleshooting
+## 10. Troubleshooting
 
 | Problem | What to check |
 |---|---|
@@ -408,15 +368,15 @@ This separation should allow a GUI to replace the menu without rewriting all the
 | Application creates a new, empty database | Confirm you launched the copy of the application that sits beside the intended `btm495.db`. |
 | Cannot log in after closing/restarting | Use the same username and password. If you switched to a different folder/database or restored a backup, its accounts may differ. |
 | Password appears invisible | This is expected: the program deliberately hides password input. |
-| Demo population says existing records found | This is intentional. Use **16 → 3** if you want to reset and seed the demo, but read the shared-database warning first. |
+| Sample-data loading says existing records found | This prevents duplicates. Use **16 → 3** to reset and reload sample data, after reviewing the shared-database warning. |
 | Ingredient shows `LOW` when quantity is not zero | `LOW` is based on **quantity below reorder level**, not quantity reaching zero. Change its threshold using option **3**. |
 | Cannot complete a customer order | Check that the order is Pending, each recipe has ingredients, and there is enough stock for the **entire** order. |
 | Purchase order does not increase stock | This is expected. Use option **5** to receive the ordered ingredients. |
 | Cannot receive a purchase order line | Verify the purchase order is open, the ingredient belongs to it and the received amount does not exceed what remains outstanding. |
-| Reset or restore reports that the database is in use | Close other Python programs, database browsers and group modules using the SQLite file, then try again. |
+| Reset or restore reports that the database is in use | Close other Python programs, database browsers and other applications using the SQLite file, then try again. |
 | Database save error | Recheck file/folder permissions and disk space. A failed inventory transaction is rolled back rather than half-saved. |
 
-## 12. Optional automated tests
+## 11. Optional automated tests
 
 From the project folder, run:
 
@@ -424,11 +384,11 @@ From the project folder, run:
 py -m unittest -v test_inventory.py test_demo_tools.py
 ```
 
-On macOS or Linux, replace `py` with `python3`. The tests exercise ingredient adjustments, customer order deductions, low-stock alerts, purchases, database persistence, demo loading, backups, resets and restores. **They create temporary test databases, not your live `btm495.db`.**
+On macOS or Linux, replace `py` with `python3`. The tests exercise ingredient adjustments, customer order deductions, low-stock alerts, purchases, database persistence, sample data loading, backups, resets and restores. **They create temporary test databases, not your live `btm495.db`.**
 
-## 13. Updating from an older project version
+## 12. Updating from an older version
 
-If you're updating from the original prototype and **already have saved data**:
+If you're updating from an earlier version and **already have saved data**:
 
 1. Close the running application.
 2. Back up your existing `btm495.db` to another folder first.
@@ -436,8 +396,8 @@ If you're updating from the original prototype and **already have saved data**:
 4. **Do not overwrite or delete `btm495.db` or the `backups/` folder.**
 5. Launch the application again and log in as normal.
 
-The ZIP contains **source files only**; the active database lives on your computer and is not reset by replacing the README or Python code.
+The repository or source ZIP does not include an active database. Replacing the README or Python files does not reset an existing `btm495.db`.
 
 ---
 
-**Scope:** This is a locally running, single-location, classroom proof of concept. It does not process real payments, run a production POS, manage multiple simultaneous locations or implement the broader system's complete payroll, loyalty, accounting and analytics features.
+**Current scope:** This is a local, single-location command-line application. It does not process payments, operate as a production POS, support multiple simultaneous locations or include payroll, loyalty, accounting or analytics modules.
