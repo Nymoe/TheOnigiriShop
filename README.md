@@ -81,8 +81,6 @@ python3 inventory_cli.py
 | `test_demo_tools.py` | Automated sample data, backup and reset tests | Optional |
 | `test_profile.py` | Use Case #5 role, validation, persistence, cancellation and rollback tests | Optional |
 | `test_user_management.py` | Tests for Owner-only management, safe deletion, password resets and role changes | Optional |
-| `OWNER_USER_MANAGEMENT_UPDATE.md` | Account-admin change log and safe update instructions | Read this |
-| `USE_CASE_5_CHANGES.md` | Profile Management design and future team integration notes | Read this |
 | `btm495.db` | **Your saved database, created automatically on first run** | **Keep it** |
 | `backups/` | Dated database backups, created when needed | **Keep it** |
 
