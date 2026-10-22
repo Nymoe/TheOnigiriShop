@@ -1,7 +1,7 @@
 """Optional demo data and reversible database reset/restore tools.
 
 IMPORTANT: Reset replaces the *entire* database (including any broader-system
-module tables). The only records copied over are login accounts, if requested.
+module tables). Login accounts and their linked profiles are copied over if requested.
 A SQLite-consistent backup is created before either reset or restore.
 Run these actions only when no other app is using the SQLite file.
 """
@@ -231,9 +231,10 @@ def reset_database(svc: InventoryService, user_id: int, *, with_demo: bool = Tru
             raise InventoryError('Only an authenticated Owner can reset the database.')
         if preserve_accounts:
             users = [dict(r) for r in db.execute(
-                'SELECT u.userID,u.name,u.email,u.username,u.role,u.passwordHash,u.passwordSalt, '
-                'e.hourlyRate,e.isActive '
+                'SELECT u.userID,u.name,u.email,u.username,u.role,u.passwordHash,u.passwordSalt,u.accountActive, '
+                'e.hourlyRate,e.isActive,p.profileID,p.phoneNumber,p.dateOfBirth,p.version '
                 'FROM "User" u LEFT JOIN Employee e ON u.userID=e.userID '
+                'LEFT JOIN Profile p ON p.userID=u.userID '
                 'WHERE u.passwordHash IS NOT NULL AND u.passwordSalt IS NOT NULL')]
     backup = backup_database(svc, 'before_reset')
     handle, filename = tempfile.mkstemp(prefix='.onigiri_new_', suffix='.db', dir=db_path.parent)
@@ -244,16 +245,23 @@ def reset_database(svc: InventoryService, user_id: int, *, with_demo: bool = Tru
         if users:
             with transaction(temp) as db:
                 for u in users:
-                    db.execute('INSERT INTO "User"(userID,name,email,username,role,passwordHash,passwordSalt) '
-                               'VALUES(?,?,?,?,?,?,?)',
+                    db.execute('INSERT INTO "User"(userID,name,email,username,role,passwordHash,passwordSalt,accountActive) '
+                               'VALUES(?,?,?,?,?,?,?,?)',
                                (u['userID'], u['name'], u['email'], u['username'], u['role'],
-                                u['passwordHash'], u['passwordSalt']))
+                                u['passwordHash'], u['passwordSalt'], u['accountActive']))
                     if u['role'] == 'Owner':
                         db.execute('INSERT INTO Owner(userID) VALUES(?)', (u['userID'],))
+                    elif u['role'] == 'Customer':
+                        db.execute('INSERT INTO Customer(userID) VALUES(?)', (u['userID'],))
                     else:
                         db.execute('INSERT INTO Employee(userID,hourlyRate,isActive) VALUES(?,?,?)',
                                    (u['userID'], u['hourlyRate'] or 0,
                                     u['isActive'] if u['isActive'] is not None else 1))
+                    if u['profileID'] is not None:
+                        db.execute('INSERT INTO Profile(profileID,userID,name,phoneNumber,dateOfBirth,version) '
+                                   'VALUES(?,?,?,?,?,?)',
+                                   (u['profileID'],u['userID'],u['name'] or '',u['phoneNumber'],
+                                    u['dateOfBirth'],u['version']))
         if with_demo:
             if not preserve_accounts:
                 # Can't seed while no owner account exists; start empty instead.

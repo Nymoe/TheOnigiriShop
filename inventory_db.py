@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 from typing import Iterator
 
 DEFAULT_DB = Path(__file__).resolve().with_name("btm495.db")
@@ -106,10 +107,36 @@ def initialize(db_path: str | Path | None = None) -> bool:
             _ensure_column(db, "User", "role", "TEXT NOT NULL DEFAULT 'Employee'")
             _ensure_column(db, "User", "passwordHash", "TEXT")
             _ensure_column(db, "User", "passwordSalt", "TEXT")
+            _ensure_column(db, "User", "accountActive", "INTEGER NOT NULL DEFAULT 1 CHECK(accountActive IN (0,1))")
             _ensure_column(db, "InventoryItem", "unit", "TEXT NOT NULL DEFAULT 'unit'")
             _ensure_column(db, "InventoryOrder", "notes", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(db, "InventoryOrderLine", "receivedQuantity", "REAL NOT NULL DEFAULT 0")
             _ensure_column(db, "Order", "createdByUserID", "INTEGER")
+            # Use Case 5: one persistent profile for every shared User row. No
+            # existing User/Employee/Owner/Customer columns are replaced.
+            db.execute('''
+                CREATE TABLE IF NOT EXISTS Profile (
+                    profileID TEXT PRIMARY KEY,
+                    userID INTEGER NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    phoneNumber TEXT,
+                    dateOfBirth TEXT,
+                    version INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(userID) REFERENCES "User"(userID)
+                )
+            ''')
+            # Backfill legacy users so existing login accounts can open Profile
+            # Management immediately. The backfill is additive and idempotent.
+            missing = db.execute('''
+                SELECT u.userID, u.name FROM "User" u
+                LEFT JOIN Profile p ON p.userID=u.userID
+                WHERE p.userID IS NULL
+            ''').fetchall()
+            for row in missing:
+                db.execute(
+                    'INSERT INTO Profile(profileID,userID,name) VALUES(?,?,?)',
+                    (uuid4().hex, row['userID'], row['name'] or '')
+                )
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS Supplier (
                     supplierID INTEGER PRIMARY KEY,

@@ -6,6 +6,8 @@ import sqlite3
 
 from inventory_service import InventoryError, InventoryService, InsufficientStockError
 from demo_tools import backup_database, list_backups, reset_database, restore_database
+from profile_service import ProfileError, ProfileNotFoundError, ProfileService
+from user_management_service import UserManagementService
 
 
 def heading(text: str) -> None:
@@ -409,33 +411,214 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
         input("\nPress Enter to continue...")
 
 
-def employees_menu(svc: InventoryService, user: dict) -> None:
-    if user["role"] != "Owner":
-        raise InventoryError("Only owners can create other user accounts.")
-    heading("User accounts")
-    table(svc.list_users(), [("userID", "ID"), ("name", "Name"),
-                             ("username", "Username"), ("role", "Role")])
-    if confirm("Create another account?"):
-        role_choice = prompt("Role: [e] Employee or [o] Owner", "e").casefold()
-        if role_choice not in {"e", "o"}:
-            print("  Cancelled: choose e or o.")
+def profile_menu(svc: ProfileService, user: dict) -> None:
+    """Use Case 5: view -> optionally edit -> validate -> save/cancel."""
+    try:
+        profile = svc.view_profile(user['userID'])
+    except ProfileNotFoundError as exc:
+        print(f"  {exc}")
+        return
+    while True:
+        heading('PROFILE MANAGEMENT | My Profile')
+        print(f"  Profile ID:    {profile.profile_id}")
+        print(f"  Username:      {profile.username} (read-only)")
+        print(f"  Role:          {profile.role} (read-only)")
+        print(f"  Email:         {profile.email or 'Not provided'} (read-only)")
+        print(f"  Name:          {profile.name}")
+        print(f"  Phone number:  {profile.phone_number or 'Not provided'}")
+        print(f"  Date of birth: {profile.date_of_birth or 'Not provided'}")
+        if not confirm('Would you like to update your profile?'):
+            return  # view-only happy path: no database write
+        print("  Press Enter to keep a field, or type '-' to clear phone/date of birth.")
+        changes = {}
+        for key, label, original in (
+            ('name', 'Name', profile.name),
+            ('phoneNumber', 'Phone number', profile.phone_number),
+            ('dateOfBirth', 'Date of birth (YYYY-MM-DD)',
+             profile.date_of_birth.isoformat() if profile.date_of_birth else None),
+        ):
+            typed = input(f"{label} [{original or 'Not provided'}]: ").strip()
+            if typed:
+                changes[key] = '' if typed == '-' else typed
+        if not changes:
+            print('  Nothing changed. The profile remains unchanged.')
             return
-        role = "Owner" if role_choice == "o" else "Employee"
-        if role == "Owner" and not confirm("Allow this new user to manage accounts and reset the database?"):
-            print("  Cancelled.")
-            return
-        name = prompt("Name")
-        username = prompt("Username")
-        pw = getpass("Password (at least 8 characters): ")
-        pw2 = getpass("Repeat password: ")
-        if pw != pw2:
-            raise InventoryError("Passwords do not match. No account was created.")
-        svc.create_user(name, username, pw, role)
-        print(f"  {role} account created. The user can log in with their username and password.")
+        try:
+            profile.validate_changes(changes)
+        except ProfileError as exc:
+            print(f'  Please correct the information: {exc}')
+            continue  # exceptional flow 5A.4A: display error and retry
+        if not confirm('Save these changes?'):
+            print('  Update cancelled. Unsaved changes were discarded.')
+            return  # exceptional flow 5A.3A
+        profile = svc.update_profile(user['userID'], changes, expected_version=profile.version)
+        user['name'] = profile.name  # menu heading uses shared User.name
+        print('  Profile successfully updated and saved.')
+        return
 
+
+def employees_menu(svc: InventoryService, user: dict) -> None:
+    """Option 15: owner-only CRUD-style management of shared user accounts."""
+    admin = UserManagementService(svc.db_path)
+    actor_id = user['userID']  # passed from the authenticated login
+    while True:
+        heading('USER MANAGEMENT | Owner only')
+        table(admin.list_accounts(actor_id), [('userID', 'ID'), ('name', 'Name'),
+                                               ('username', 'Username'), ('role', 'Role'),
+                                               ('status', 'Status')])
+        print("""
+   1. View user details              5. Reset user's password
+   2. Create new user                6. Disable / enable user
+   3. Edit user information          7. Delete user (if no linked records)
+   4. Change user's role             0. Return to main menu
+""")
+        choice = prompt('Select user management option')
+        if choice == '0':
+            return
+        try:
+            if choice == '1':
+                uid = ask_id('User ID')
+                details = admin.get_account(actor_id, uid)
+                heading(f'Account #{uid} | {details["username"]}')
+                print(f"  Name:          {details['name']}")
+                print(f"  Username:      {details['username']}")
+                print(f"  Role:          {details['role']}")
+                print(f"  Status:        {'Active' if details['accountActive'] else 'Disabled'}")
+                print(f"  Email:         {details['email'] or 'Not provided'}")
+                print(f"  Phone:         {details['phoneNumber'] or 'Not provided'}")
+                print(f"  Date of birth: {details['dateOfBirth'] or 'Not provided'}")
+            elif choice == '2':
+                roles = {'e': 'Employee', 'o': 'Owner', 'c': 'Customer'}
+                selection = (prompt('Role: [e] Employee, [o] Owner or [c] Customer') or 'e').lower()
+                if selection not in roles:
+                    print('  Invalid role; no account created.')
+                    continue
+                role = roles[selection]
+                if role == 'Owner' and not confirm('Allow another user Owner-level access to accounts and backups?'):
+                    print('  Cancelled.')
+                    continue
+                name = prompt('Name')
+                username = prompt('Username')
+                email = prompt('Email address (optional)')
+                phone_number = prompt('Phone number (optional)')
+                date_of_birth = prompt('Date of birth (YYYY-MM-DD, optional)')
+                pw = getpass('Password (8+ characters): ')
+                pw2 = getpass('Repeat password: ')
+                if pw != pw2:
+                    raise InventoryError('Passwords do not match. No account was created.')
+                new_id = admin.create_account(actor_id, name, username, pw, role,
+                                              email=email, phone_number=phone_number,
+                                              date_of_birth=date_of_birth)
+                print(f'  {role} account #{new_id} created successfully.')
+            elif choice == '3':
+                uid = ask_id('User ID to edit')
+                details = admin.get_account(actor_id, uid)
+                print("  Press Enter to keep an existing value; type '-' to clear email, phone or birth date.")
+                changes = {}
+                for key, label, original in (
+                    ('name', 'Name', details['name']),
+                    ('username', 'Username', details['username']),
+                    ('email', 'Email address', details['email']),
+                    ('phoneNumber', 'Phone number', details['phoneNumber']),
+                    ('dateOfBirth', 'Date of birth (YYYY-MM-DD)', details['dateOfBirth']),
+                ):
+                    typed = input(f"{label} [{original or 'Not provided'}]: ").strip()
+                    if typed:
+                        changes[key] = '' if typed == '-' else typed
+                if not changes:
+                    print('  No changes made.')
+                    continue
+                if not confirm('Save the edited information?'):
+                    print('  Cancelled; nothing was saved.')
+                    continue
+                updated = admin.edit_account(actor_id, uid, changes)
+                if uid == actor_id:
+                    user['name'], user['username'] = updated['name'], updated['username']
+                print('  Account and profile updated successfully.')
+            elif choice == '4':
+                uid = ask_id('User ID to change role')
+                details = admin.get_account(actor_id, uid)
+                roles = {'e': 'Employee', 'o': 'Owner', 'c': 'Customer'}
+                selection = prompt('New role: [e] Employee, [o] Owner or [c] Customer').lower()
+                if selection not in roles:
+                    print('  Invalid role; no changes made.')
+                    continue
+                role = roles[selection]
+                if role == 'Owner':
+                    print('  WARNING: This grants full account and database management access.')
+                if not confirm(f"Change {details['username']} from {details['role']} to {role}?"):
+                    print('  Cancelled.')
+                    continue
+                admin.change_role(actor_id, uid, role)
+                print('  User role updated.')
+            elif choice == '5':
+                uid = ask_id('User ID for password reset')
+                details = admin.get_account(actor_id, uid)
+                print(f"  Resetting password for {details['username']} (#{uid}).")
+                _owner_recheck(svc, user)
+                pw = getpass('New password (8+ characters): ')
+                pw2 = getpass('Repeat new password: ')
+                if pw != pw2:
+                    raise InventoryError('Passwords do not match. Nothing was changed.')
+                admin.reset_password(actor_id, uid, pw)
+                print('  Password changed; the user can log in with the new password.')
+            elif choice == '6':
+                uid = ask_id('User ID to disable / enable')
+                details = admin.get_account(actor_id, uid)
+                enable = not bool(details['accountActive'])
+                action = 'Enable' if enable else 'Disable'
+                if not confirm(f"{action} login for {details['username']} (#{uid})?"):
+                    print('  Cancelled.')
+                    continue
+                admin.set_active(actor_id, uid, enable)
+                print(f'  User account {"enabled" if enable else "disabled"}. Historical records retained.')
+            elif choice == '7':
+                uid = ask_id('User ID to permanently delete')
+                details = admin.get_account(actor_id, uid)
+                print(f"  WARNING: Delete {details['username']} (#{uid}) and their profile permanently.")
+                print('  Accounts linked to orders, inventory or other business records CANNOT be deleted.')
+                if prompt('Type DELETE to confirm') != 'DELETE':
+                    print('  Cancelled.')
+                    continue
+                _owner_recheck(svc, user)
+                admin.delete_account(actor_id, uid)
+                print('  User and profile deleted.')
+            else:
+                print('  Invalid selection. Choose 0–7.')
+        except (InventoryError, ProfileError, sqlite3.Error, OSError) as exc:
+            print(f'  Could not complete user management action: {exc}')
+            if isinstance(exc, sqlite3.IntegrityError):
+                print('  This account is referenced elsewhere; consider disabling it instead.')
 
 def menu(svc: InventoryService, user: dict) -> None:
     while True:
+        # Do not let an already-open session retain privileges after an Owner
+        # disables the account or changes its role in another session.
+        live = svc._read('''SELECT name,username,role FROM "User"
+                            WHERE userID=? AND accountActive=1 AND passwordHash IS NOT NULL''',
+                         (user['userID'],))
+        if not live:
+            print('  Your account is no longer active. Returning to login.')
+            return
+        user.update(live[0])
+        if user['role'] == 'Customer':
+            heading(f"ONIGIRI SHOP | Customer | {user['name']}")
+            print("  18. My Profile    17. Log out    0. Exit")
+            selection = prompt("Select an option")
+            if selection == "0":
+                raise SystemExit(0)
+            if selection == "17":
+                print("  Logged out.")
+                return
+            if selection != "18":
+                print("  Invalid selection. Customer inventory administration is not available.")
+                continue
+            try:
+                profile_menu(ProfileService(svc.db_path), user)
+            except (ProfileError, sqlite3.Error, OSError) as exc:
+                print(f"  Profile could not be saved: {exc}")
+            input("\nPress Enter to return to the menu...")
+            continue
         heading(f"ONIGIRI SHOP | Inventory Management | {user['name']} ({user['role']})")
         print('''
    1. View inventory                  10. Review low-stock alerts
@@ -446,7 +629,8 @@ def menu(svc: InventoryService, user: dict) -> None:
    6. Create/edit recipe              15. Manage users (Owner)
    7. View recipes                    16. Demo / backup / reset (Owner)
    8. Create customer order           17. Log out
-   9. View/complete customer orders    0. Exit
+   9. View/complete customer orders   18. My Profile
+                                      0. Exit
 ''')
         selection = prompt("Select an option")
         if selection == "0":
@@ -471,6 +655,7 @@ def menu(svc: InventoryService, user: dict) -> None:
             "14": lambda: suppliers_menu(svc),
             "15": lambda: employees_menu(svc, user),
             "16": lambda: demo_menu(svc, user),
+            "18": lambda: profile_menu(ProfileService(svc.db_path), user),
         }
         action = actions.get(selection)
         if not action:
@@ -480,7 +665,7 @@ def menu(svc: InventoryService, user: dict) -> None:
             needs_login = action()
             if needs_login is True:
                 return
-        except (InventoryError, sqlite3.Error, OSError) as exc:
+        except (InventoryError, ProfileError, sqlite3.Error, OSError) as exc:
             print(f"\n  Not saved: {exc}")
             if isinstance(exc, sqlite3.Error):
                 print("  The database operation was rolled back. Please try again.")
