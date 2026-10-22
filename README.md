@@ -1,6 +1,6 @@
 # Onigiri Shop — Inventory Management System
 
-This Python application provides a menu-driven system for managing inventory and orders at an Onigiri shop. It supports ingredients, recipes, customer orders, automatic stock deductions, low-stock alerts, purchase orders, supplier deliveries, and inventory transaction history.
+This Python application provides a menu-driven system for managing inventory, orders, account administration, and Use Case #5 (Profile Management) at an Onigiri shop. It supports ingredients, recipes, customer orders, automatic stock deductions, low-stock alerts, purchase orders, supplier deliveries, and inventory transaction history.
 
 **The database is persistent.** Data is stored in a local SQLite file named `btm495.db`. The application creates that file **only if it does not already exist**. On subsequent launches, it reads and updates the same file; it does not wipe the database on startup. You do **not** need to run the original `database.py` or `main.py` to use this application.
 
@@ -70,13 +70,19 @@ python3 inventory_cli.py
 | File | Purpose | Edit it for ordinary use? |
 |---|---|---|
 | `inventory_cli.py` | Main menu, login prompts, input and output | No |
-| `inventory_service.py` | Business rules: inventory, recipes, orders, deliveries, alerts, users | No |
+| `inventory_service.py` | Business rules: inventory, recipes, orders, deliveries, alerts, shared login accounts | No |
+| `profile_service.py` | Use Case #5: Profile model, validation, viewing and atomic updates | No |
+| `user_management_service.py` | Owner-only management of shared User accounts, roles, credentials and activation | No |
 | `inventory_db.py` | SQLite database connection, tables and compatible schema additions | No |
 | `demo_tools.py` | Sample Onigiri data; backup, reset and restore actions | No |
 | `START_HERE.bat` | Windows double-click launcher | No |
 | `README.md` | This setup and menu guide | Read this |
 | `test_inventory.py` | Automated inventory feature tests | Optional |
 | `test_demo_tools.py` | Automated sample data, backup and reset tests | Optional |
+| `test_profile.py` | Use Case #5 role, validation, persistence, cancellation and rollback tests | Optional |
+| `test_user_management.py` | Tests for Owner-only management, safe deletion, password resets and role changes | Optional |
+| `OWNER_USER_MANAGEMENT_UPDATE.md` | Account-admin change log and safe update instructions | Read this |
+| `USE_CASE_5_CHANGES.md` | Profile Management design and future team integration notes | Read this |
 | `btm495.db` | **Your saved database, created automatically on first run** | **Keep it** |
 | `backups/` | Dated database backups, created when needed | **Keep it** |
 
@@ -101,18 +107,20 @@ Every later launch normally goes **directly to the Login screen**. Enter the sam
 
 Enter `exit` at the username prompt to close the application without signing in. From the main menu, choose **17 — Log out** to return to the login screen, or **0 — Exit** to close the application completely.
 
-### Add employees or another Owner
+### Add Employees, Customers or another Owner
 
 1. Sign in as an Owner.
 2. Select **15 — Manage users**.
-3. Review existing users and confirm that you want to create an account.
-4. Select `e` for **Employee** or `o` for **Owner**.
-5. Enter the person's name, unique username and password (twice).
+3. Review existing users, then choose **2 — Create new user**.
+4. Select `e` for **Employee**, `o` for **Owner**, or `c` for **Customer**.
+5. Enter the person's name and unique username, optional email address, phone number and date of birth (press Enter to skip any of these), and password (twice). If provided, the date of birth must use **YYYY-MM-DD**.
 6. The new user can now sign in after you log out.
 
-Both roles can use the inventory and ordering menus. Only an **Owner** can create accounts or open **16 — Demo / backup / reset**. Be careful when adding another Owner: that person can also reset and restore the database.
+The Owner's **3 — Edit user information** option supports the same profile information: name, username, email, phone number and date of birth. Role changes and password resets are handled separately. Customers can view these details under **18 — My Profile**, where they can update their own name, phone number and date of birth; their username, role and email remain read-only.
 
-> Account recovery and user deactivation are not available in this version. If credentials are lost, restoring a known backup or starting with a new database may be necessary.
+Owners and Employees can use the original inventory and ordering menus. Customers can sign in and view/update **their own profile only**; inventory administration is unavailable to Customers. Only an **Owner** can create accounts or open **16 — Demo / backup / reset**. Be careful when adding another Owner: that person can also reset and restore the database.
+
+> Owners can now reset an account password or disable and reactivate logins without destroying the account history. When a disabled user enters their correct password, the login screen tells them their account is disabled and to contact an Owner. Account removal is only possible when the user has no related business records.
 
 ## 4. Main menu reference
 
@@ -134,9 +142,10 @@ After a successful login, the menu stays open in a loop. Type an option number a
 | **12** | View inventory purchase orders | Shows order status and quantities ordered, received and still outstanding. |
 | **13** | View transaction history | Lists the most recent inventory transactions, including manual changes and order deductions. |
 | **14** | Manage suppliers | Lists suppliers and allows you to add one with contact information. |
-| **15** | Manage users (**Owner only**) | Lists accounts and creates new Employee or Owner users. |
+| **15** | Manage users (**Owner only**) | View, create, edit, change role, reset password, disable/reactivate and (where safe) delete user accounts. |
 | **16** | Demo / backup / reset (**Owner only**) | Loads sample data, creates backups, resets the database or restores a backup. |
 | **17** | Log out | Returns to the username/password login screen. |
+| **18** | My Profile | Opens Use Case #5 for the signed-in Customer, Employee or Owner: view, edit or cancel. |
 | **0** | Exit | Closes the program without deleting saved data. |
 
 ### Useful input conventions
@@ -259,6 +268,44 @@ Use **12 — View inventory purchase orders** to see each purchase order and its
 
 Use **13 — View transaction history** to review the **40 most recent** inventory movements, newest first. Adding stock records a positive change; deductions record a negative change. Transaction types include Opening Stock, Manual Adjustment, Supplier Delivery and Customer Order.
 
+## Owner account management (option 15)
+
+After signing in as an **Owner**, enter **15** to display the User Management submenu. It **stays open** until you select **0 — Return to main menu**, so you can work on several users without starting again.
+
+| Choice | Owner action | What changes |
+|---|---|---|
+| 1 | View user details | Shows profile and login metadata without passwords. |
+| 2 | Create new user | Creates a shared `User`, associated role subtype and `Profile`; email, phone number and date of birth are optional. |
+| 3 | Edit user information | Changes name, username, email, phone or birth date. Blank input keeps a field; a single `-` clears optional fields. |
+| 4 | Change user's role | Changes Employee/Customer/Owner, updating subtype data consistently. Restricted by any existing foreign-key references. |
+| 5 | Reset password | Requires re-entering the current Owner password, and choosing the new account password twice. |
+| 6 | Disable / enable user | Disables sign-in while retaining profiles, orders, transactions, and other historical records. |
+| 7 | Delete user | Requires explicit DELETE confirmation and Owner password. Only unreferenced accounts can be permanently deleted. |
+| 0 | Return | Leaves account management for the regular menu. |
+
+**Important:** The account-management service checks the Owner role against the *current database* every time; even a direct call by an Employee/Customer is denied. Do not disable your only Owner account. If a user has linked business records, disable their account instead of deleting it. Other team modules should use the same `User.userID` identity rather than creating a second user database.
+
+For existing installations, update the Python code **inside your existing project folder** but retain your own `btm495.db` and `backups` directory. On the next start, the program adds a single `accountActive` field to existing `User` records; it does **not** remove existing accounts or profile values. If you unzip to a different folder, it will instead create a new database there unless you move your existing `btm495.db` into that folder.
+
+---
+
+## Use Case #5: My Profile (option 18)
+
+This addition implements **5a View Profile** (always included) and **5b Update Profile** (optional). It follows the supplied Use Case #5 description, activity diagram, class diagram and Profile CRC card.
+
+1. Log in as an Owner, Employee or Customer using the existing credentials. Owners can create a Customer account using option **15**; customer self-registration was not specified and is not included.
+2. Select **18 — My Profile**. The system retrieves **your own** linked profile and displays the profile ID, name, phone number and birth date, plus read-only username, role and email (if any).
+3. Respond **n** to close the profile without changing it. Respond **y** to edit name, phone number or birth date.
+4. For each field, press **Enter** to keep the existing value. Type a new value to change it. Type **`-`** to remove a phone number or birth date. Dates use **YYYY-MM-DD**.
+5. The system validates the proposed values. It requires a nonempty name, checks phone number syntax, and prevents impossible or future birth dates. Invalid entries display an error and invite correction. You can decline to save and discard all pending edits.
+6. Confirm **Save** to write changes atomically to the existing SQLite database. The updated name also appears in the shared `User` table and menu after successful saving. A save failure rolls back all pending changes.
+
+**Customers** see a limited menu (`18 — My Profile`, `17 — Log out`, `0 — Exit`). They do not receive the stock/order administration menu. The application currently trusts the user ID returned by its existing login service; any future web/API integration must identify the user from an authenticated session and must not accept an arbitrary user ID from the client.
+
+**For developers:** `ProfileService(db_path).view_profile(current_user_id)` returns an immutable `Profile` domain object. `update_profile(current_user_id, {'name': ..., 'phoneNumber': ..., 'dateOfBirth': ...}, expected_version=profile.version)` validates and commits the user's data. `Profile.validate_changes()` handles the CRC card's validation responsibility. Profile IDs are stable strings, as specified by that card. Future use cases should reuse the same `User.userID` and `Profile` row, not introduce another user/profile table. No loyalty points, payroll data, or authentication credentials are editable through this module.
+
+---
+
 ## 8. Sample data, backups, resets and restore
 
 **Option 16 is available to Owners only.** It opens its own sub-menu:
@@ -267,8 +314,8 @@ Use **13 — View transaction history** to review the **40 most recent** invento
 |---|---|---|
 | **1 — Populate an EMPTY inventory** | Adds the prepared Onigiri Shop scenario without first replacing the database. | **Adds sample records**; rejects existing inventory/sample data to avoid duplicates. |
 | **2 — Create backup** | Copies the current database to `backups/`. | **Does not change** the active database. |
-| **3 — Backup + reset + sample data** | Creates a backup, clears the live database and loads the supplied sample dataset. | **Preserves Owner/Employee login accounts**; replaces business tables. Use when a consistent starting dataset is needed. |
-| **4 — Backup + reset empty** | Creates a backup and prepares a blank set of business tables. | **Preserves login accounts**; business records are cleared. |
+| **3 — Backup + reset + sample data** | Creates a backup, clears the live database and loads the supplied sample dataset. | **Preserves Customer/Employee/Owner login accounts and their profiles**; replaces business tables. Use when a consistent starting dataset is needed. |
+| **4 — Backup + reset empty** | Creates a backup and prepares a blank set of business tables. | **Preserves login accounts and their profiles**; business records are cleared. |
 | **5 — Restore a previous backup** | Lists backups, allows you to choose one and backs up the current state before restoring. | Replaces the **entire** live database with the selected backup, including accounts and unrelated tables. |
 | **6 — Backup + factory reset** | Backs up the current database and clears everything. | Also **removes all accounts**; the next startup asks you to create a new Owner. |
 | **0 — Back** | Returns to the main menu. | No changes. |
@@ -337,7 +384,8 @@ The application can share key tables with an existing SQLite-based system instea
 
 | Inventory concept | SQLite table(s) | Purpose |
 |---|---|---|
-| User / Owner / Employee | `User`, `Owner`, `Employee` | Shared account records and roles |
+| User / Owner / Employee / Customer | `User`, `Owner`, `Employee`, `Customer` | Shared account records and roles |
+| Profile | `Profile` | One-to-one user profile with name, phone, birth date, and revision number |
 | Ingredient | `InventoryItem` | Ingredient names, units, quantities, reorder thresholds |
 | InventoryTransaction | `InventoryTransaction`, `InventoryAdjustment` | Detailed inventory movement history |
 | Supplier | `Supplier` | Contact and receipt linkage |
@@ -352,7 +400,7 @@ The `RecipeIngredient` table stores the amount of an ingredient needed for one s
 
 1. **Make a separate copy of the database before connecting it.**
 2. Put the application's `.py` files alongside that `btm495.db`, or carefully arrange for `inventory_db.py` to point to your intended database location.
-3. Run `inventory_cli.py` normally. It will use the existing file and add its missing inventory-supporting columns and tables as needed, without resetting it on startup.
+3. Run `inventory_cli.py` normally. It will use the existing file and add its missing inventory/profile-supporting columns and tables as needed, without resetting it on startup. Existing User records are given linked profiles if missing.
 4. Test the connection using a **copy** of your real database first, especially if its existing schema differs from the supplied tables.
 
 **Caution:** The database path is based on the folder containing `inventory_db.py`, **not** whatever folder your terminal happens to be in. If you accidentally run a second copy of the application from another extracted folder, it may create a second `btm495.db` there. Always run the correct copy.
@@ -384,7 +432,7 @@ From the project folder, run:
 py -m unittest -v test_inventory.py test_demo_tools.py
 ```
 
-On macOS or Linux, replace `py` with `python3`. The tests exercise ingredient adjustments, customer order deductions, low-stock alerts, purchases, database persistence, sample data loading, backups, resets and restores. **They create temporary test databases, not your live `btm495.db`.**
+On macOS or Linux, replace `py` with `python3`. The tests exercise inventory operations plus Profile Management for every role, data validation, cancellation, database rollback, account-preserving reset and restore. **They create temporary test databases, not your live `btm495.db`.**
 
 ## 12. Updating from an older version
 

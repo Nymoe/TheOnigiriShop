@@ -13,8 +13,10 @@ import math
 from pathlib import Path
 import secrets
 import sqlite3
+from uuid import uuid4
 
 from inventory_db import connect, initialize, transaction
+from profile_service import _validate_dob, _validate_phone
 
 EPSILON = 1e-8
 
@@ -29,6 +31,20 @@ class InsufficientStockError(InventoryError):
     def __init__(self, shortages: list[str]):
         self.shortages = shortages
         super().__init__("Insufficient inventory: " + "; ".join(shortages))
+
+
+def _validate_email(email: str | None) -> str | None:
+    """Use the same optional email validation for account creation and editing."""
+    if email is None:
+        return None
+    if not isinstance(email, str):
+        raise InventoryError('Email must be text.')
+    email = email.strip() or None
+    if email and (len(email) > 254 or email.count('@') != 1 or
+                  any(c.isspace() or ord(c) < 32 for c in email) or
+                  not all(email.split('@')) or '.' not in email.split('@')[1]):
+        raise InventoryError('Enter a valid email address, or clear the email field.')
+    return email
 
 
 def _quantity(value: int | float | str, label: str = "Quantity", *, zero_ok: bool = False) -> float:
@@ -89,21 +105,26 @@ class InventoryService:
 
     # ----- USERS (shared User table; no passwords stored in plaintext) -----
     def has_logins(self) -> bool:
-        return bool(self._read('SELECT 1 FROM "User" WHERE passwordHash IS NOT NULL LIMIT 1'))
+        return bool(self._read('SELECT 1 FROM "User" WHERE passwordHash IS NOT NULL AND accountActive=1 LIMIT 1'))
 
-    def create_user(self, name: str, username: str, password: str, role: str = "Employee") -> int:
+    def create_user(self, name: str, username: str, password: str, role: str = "Employee",
+                    email: str | None = None, phone_number: str | None = None,
+                    date_of_birth: str | None = None) -> int:
         name, username = name.strip(), username.strip()
         role = role.title()
+        email = _validate_email(email)
+        phone_number = _validate_phone(phone_number)
+        birth_date = _validate_dob(date_of_birth)
         if not name or not username:
             raise InventoryError("Name and username are required.")
-        if role not in {"Owner", "Employee"}:
-            raise InventoryError("Role must be Owner or Employee.")
+        if role not in {"Owner", "Employee", "Customer"}:
+            raise InventoryError("Role must be Owner, Employee or Customer.")
         if len(password) < 8:
             raise InventoryError("Password must contain at least eight characters.")
         with transaction(self.db_path) as db:
             if db.execute('SELECT 1 FROM "User" WHERE lower(username) = lower(?)', (username,)).fetchone():
                 raise InventoryError("That username is already in use.")
-            if role == "Employee" and not db.execute(
+            if role != "Owner" and not db.execute(
                 'SELECT 1 FROM "User" WHERE role = ? AND passwordHash IS NOT NULL LIMIT 1',
                 ("Owner",)
             ).fetchone():
@@ -111,19 +132,26 @@ class InventoryService:
             salt = secrets.token_hex(16)
             password_hash = pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 220_000).hex()
             result = db.execute(
-                'INSERT INTO "User" (name, username, role, passwordHash, passwordSalt) '
-                'VALUES (?, ?, ?, ?, ?)', (name, username, role, password_hash, salt)
+                'INSERT INTO "User" (name, username, role, email, passwordHash, passwordSalt) '
+                'VALUES (?, ?, ?, ?, ?, ?)', (name, username, role, email, password_hash, salt)
             )
             if role == "Owner":
                 db.execute('INSERT INTO "Owner"(userID) VALUES (?)', (result.lastrowid,))
-            else:
+            elif role == "Employee":
                 db.execute('INSERT INTO "Employee"(userID, hourlyRate, isActive) VALUES (?, 0, 1)',
                            (result.lastrowid,))
+            else:
+                db.execute('INSERT INTO "Customer"(userID) VALUES (?)', (result.lastrowid,))
+            # Create the one-to-one profile in the same transaction as the login.
+            db.execute('INSERT INTO Profile(profileID,userID,name,phoneNumber,dateOfBirth) '
+                       'VALUES(?,?,?,?,?)',
+                       (uuid4().hex, result.lastrowid, name, phone_number,
+                        birth_date.isoformat() if birth_date else None))
             return result.lastrowid
 
     def login(self, username: str, password: str) -> dict:
         rows = self._read(
-            'SELECT userID, name, username, role, passwordHash, passwordSalt FROM "User" '
+            'SELECT userID, name, username, role, passwordHash, passwordSalt, accountActive FROM "User" '
             'WHERE lower(username) = lower(?) AND passwordHash IS NOT NULL', (username.strip(),)
         )
         if len(rows) != 1:
@@ -136,6 +164,8 @@ class InventoryService:
             raise InventoryError("Invalid username or password.") from None
         if not hmac.compare_digest(calculated, stored):
             raise InventoryError("Invalid username or password.")
+        if not user["accountActive"]:
+            raise InventoryError("This account has been disabled. Please contact an Owner to reactivate it.")
         return {k: user[k] for k in ("userID", "name", "username", "role")}
 
     def list_users(self) -> list[dict]:

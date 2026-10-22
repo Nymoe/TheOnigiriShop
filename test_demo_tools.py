@@ -166,11 +166,13 @@ class DemoMenuFlowTests(unittest.TestCase):
 
     def test_account_menu_adds_owner(self):
         from inventory_cli import employees_menu
-        with patch('inventory_cli.confirm', side_effect=[True, True]), \
-             patch('inventory_cli.prompt', side_effect=['o', 'Secondary Owner', 'second']), \
+        # Select create-account from the expanded Owner-only menu, then return.
+        with patch('inventory_cli.confirm', return_value=True), \
+             patch('inventory_cli.prompt', side_effect=['2', 'o', 'Secondary Owner', 'second', '', '', '', '0']), \
              patch('inventory_cli.getpass', side_effect=['second-password','second-password']):
             employees_menu(self.svc, self.user)
         self.assertEqual(self.svc.login('second', 'second-password')['role'], 'Owner')
+
 
 
 if __name__ == '__main__':
