@@ -1,4 +1,4 @@
-"""Owner-only account administration, separate from Use Case 5 self-service profiles.
+"""Owner-only account administration, separate from self-service profiles.
 
 All operations use the shared User / Profile / role subtype tables. The actor ID
 must come from an authenticated session, never an arbitrary form field. Database
@@ -28,8 +28,12 @@ def _owner(db: sqlite3.Connection, actor_id: int) -> None:
 
 def _account(db: sqlite3.Connection, target_id: int):
     user = db.execute('''SELECT u.userID, u.name, u.username, u.email, u.role,
+                        CASE WHEN u.role='Customer' AND a.loyaltyAccountID IS NOT NULL
+                             THEN CAST(c.customerID AS TEXT) ELSE '—' END AS customerID,
                         u.accountActive, p.profileID, p.phoneNumber, p.dateOfBirth
                         FROM "User" u LEFT JOIN Profile p ON p.userID=u.userID
+                        LEFT JOIN Customer c ON c.userID=u.userID
+                        LEFT JOIN LoyaltyAccount a ON a.customerID=c.customerID
                         WHERE u.userID=?''', (_ident(target_id, 'User ID'),)).fetchone()
     if user is None:
         raise InventoryError(f'User #{target_id} was not found.')
@@ -59,9 +63,13 @@ class UserManagementService:
         try:
             _owner(db, actor_id)
             return [dict(row) for row in db.execute('''
-                SELECT userID, name, username, role,
-                       CASE WHEN accountActive=1 THEN 'Active' ELSE 'Disabled' END AS status
-                FROM "User" ORDER BY userID
+                SELECT u.userID, u.name, u.username, u.role,
+                       CASE WHEN u.role='Customer' AND a.loyaltyAccountID IS NOT NULL
+                            THEN CAST(c.customerID AS TEXT) ELSE '—' END AS customerID,
+                       CASE WHEN u.accountActive=1 THEN 'Active' ELSE 'Disabled' END AS status
+                FROM "User" u LEFT JOIN Customer c ON c.userID=u.userID
+                LEFT JOIN LoyaltyAccount a ON a.customerID=c.customerID
+                ORDER BY u.userID
             ''')]
         finally:
             db.close()
@@ -127,6 +135,12 @@ class UserManagementService:
             current = _account(db, target_id)
             if current['role'] == new_role:
                 return
+            # Loyalty records are tied to the Customer identity.
+            if current['role'] == 'Customer' and db.execute("""
+                    SELECT 1 FROM LoyaltyAccount a JOIN Customer c
+                    ON a.customerID=c.customerID WHERE c.userID=?""", (target_id,)).fetchone():
+                raise InventoryError('Customer has a loyalty account. Do not change the role; '
+                                     'disable access if needed to preserve loyalty history.')
             if current['role'] == 'Owner':
                 _protect_owner(db, actor_id, target_id)
             # Deleting former subtype is safe only when no other team table

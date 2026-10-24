@@ -6,8 +6,12 @@ import sqlite3
 
 from inventory_service import InventoryError, InventoryService, InsufficientStockError
 from demo_tools import backup_database, list_backups, reset_database, restore_database
+from sample_users import load_sample_users
 from profile_service import ProfileError, ProfileNotFoundError, ProfileService
 from user_management_service import UserManagementService
+from loyalty_service import LoyaltyError, LoyaltyService, AccountNotFoundError
+from payroll import DEDUCTION_RATE, OVERTIME_MULTIPLIER, Payroll, PayrollError
+from payroll_service import PayrollService
 
 
 def heading(text: str) -> None:
@@ -42,9 +46,11 @@ def prompt(text: str, default: str | None = None) -> str:
 
 
 def ask_number(text: str, *, minimum: float = 0, allow_zero: bool = False,
-               default: float | None = None) -> float:
+               default: float | None = None, optional: bool = False) -> float | None:
     while True:
         raw = prompt(text, str(default) if default is not None else None)
+        if not raw and optional:
+            return None
         try:
             from math import isfinite
             qty = float(raw)
@@ -231,18 +237,93 @@ def order_create(svc: InventoryService, user: dict) -> None:
     if not items:
         print("  Order cancelled.")
         return
+    print('  Customer IDs can be found under 19 → 9 (List customer users).')
+    print('  Leave Customer ID blank for an unlinked order; it can be assigned while Pending.')
+    customer_id = ask_id('Customer ID for loyalty (optional)', optional=True)
     if confirm("Save customer order as Pending?", True):
-        order_id = svc.create_customer_order(items, user["userID"])
+        order_id = svc.create_customer_order(items, user["userID"], customer_id)
         print(f"  Customer order #{order_id} saved as Pending. No stock deducted yet.")
         if confirm("Mark this order Completed now and deduct ingredients?", True):
-            completed = svc.complete_customer_order(order_id, user["userID"])
-            print(f"  Completed order #{completed['order_id']}. Stock deducted for all recipes.")
-            inventory_view(svc)
+            complete_order_flow(svc, user, order_id)
+
+
+def complete_order_flow(svc: InventoryService, user: dict, order_id: int) -> None:
+    """One guided completion flow, shared by immediate and previously Pending orders."""
+    order = svc.order_details(order_id)
+    if order['status'] != 'Pending':
+        raise InventoryError('Only a Pending order can be completed. No stock or points were changed.')
+    customer_id = order['customerID']
+    if customer_id is not None:
+        print(f'  Linked Customer ID: {customer_id}')
+        if confirm('Change the Customer ID while this order is Pending?'):
+            replacement = ask_id('New Customer ID (blank keeps current)', optional=True)
+            if replacement is not None:
+                svc.set_order_customer(order_id, replacement)
+                customer_id = replacement
+    else:
+        print('  This order has no Customer ID. Completing without one will not earn loyalty points.')
+        customer_id = ask_id('Customer ID (blank for no loyalty)', optional=True)
+        if customer_id is not None:
+            svc.set_order_customer(order_id, customer_id)
+
+    loyalty = None
+    reward_id = None
+    if customer_id is not None:
+        loyalty = LoyaltyService(svc.db_path)
+        status = loyalty.customer_status(customer_id)
+        if not status['accountActive']:
+            print('  This Customer login is disabled. An Owner can enable it under 15 → 6.')
+            loyalty = None
+        elif status['loyaltyAccountID'] is None:
+            print(f"  {status['name']} has not enrolled in loyalty yet (19 → 2).")
+            if confirm('Enroll this customer now so the order earns points?'):
+                loyalty.enroll_existing_customer(status['userID'], user['userID'])
+            else:
+                print('  The order can be completed without points. Enroll before completing to earn automatically.')
+                loyalty = None
+        elif status['loyaltyStatus'] != 'Active':
+            print('  Loyalty is suspended. An Owner must reactivate it using 19 → 8 to earn or redeem points.')
+            loyalty = None
+
+    if loyalty is not None:
+        loyalty.ensure_sample_rewards()
+        account = loyalty.retrieve_customer_account(customer_id)
+        print(f"  Loyalty account: {account['name']} | balance: {account['pointsBalance']} points")
+        rewards = [r for r in loyalty.display_available_rewards(customer_id)
+                   if r['affordable'] and r['discountAmount'] <= order['totalAmount']]
+        if rewards:
+            print('  Available discounts for this order:')
+            table(rewards, [('rewardID', 'Reward ID'), ('name', 'Reward'),
+                            ('pointsCost', 'Points needed'), ('discountAmount', 'CAD off')])
+            reward_id = ask_id('Apply Reward ID (blank = save points)', optional=True)
+        else:
+            print('  No discounts are currently affordable and applicable to this order; points will still be earned.')
+        quote = loyalty.preview_purchase(customer_id, order_id, reward_id=reward_id)
+        print(f'  Order: ${quote.purchase_amount:.2f} CAD | reward: -${quote.discount_amount:.2f} CAD '
+              f'| after reward (informational): ${quote.final_amount:.2f} CAD')
+        print(f'  Loyalty points: {quote.previous_balance} - {quote.points_redeemed} '
+              f'+ {quote.points_earned} = {quote.new_balance}')
+        print('  Note: payment is not processed; the discount is recorded for loyalty reporting only.')
+    if not confirm('Complete order and deduct inventory' +
+                   (' (including loyalty points)' if loyalty else ' (no loyalty points)') + '?'):
+        print('  Completion cancelled; order remains Pending. No stock or points deducted.')
+        return
+    if loyalty is None:
+        result = svc.complete_customer_order(order_id, user['userID'])
+        print(f"  Completed order #{result['order_id']}. No loyalty transaction recorded.")
+    else:
+        result = loyalty.complete_order_with_loyalty(user['userID'], customer_id,
+                                                      order_id, reward_id=reward_id)
+        print(f"  Completed order #{result['order_id']}. Stock deducted and "
+              f"{result['pointsEarned']} loyalty points earned.")
+        print('\n' + loyalty.generate_receipt(result['loyaltyTransactionID']))
+    inventory_view(svc)
 
 
 def show_orders(svc: InventoryService) -> None:
     table(svc.customer_orders(), [("orderID", "Order ID"), ("orderDate", "Date"),
-                                  ("status", "Status"), ("totalAmount", "Total"),
+                                  ("status", "Status"), ("customerID", "Customer ID"),
+                                  ("totalAmount", "Total"),
                                   ("recipesCount", "Recipe lines")])
 
 
@@ -255,10 +336,8 @@ def orders_menu(svc: InventoryService, user: dict) -> None:
     table(svc.order_recipes(order_id), [("recipeID", "ID"), ("name", "Recipe"),
                                         ("quantity", "Servings"), ("price", "Unit price")])
     action = prompt("[c] Complete | [x] Cancel pending order | [enter] Back").lower()
-    if action == "c" and confirm("Confirm completion and inventory deduction?"):
-        completed = svc.complete_customer_order(order_id, user["userID"])
-        print(f"  Completed order #{completed['order_id']}.")
-        inventory_view(svc)
+    if action == "c":
+        complete_order_flow(svc, user, order_id)
     elif action == "x" and confirm("Cancel order?"):
         svc.cancel_customer_order(order_id)
         print("  Order cancelled; no stock was deducted.")
@@ -335,7 +414,7 @@ def _owner_recheck(svc: InventoryService, user: dict) -> None:
 
 def _reset_confirmation() -> bool:
     print("  WARNING: ALL BUSINESS DATA in btm495.db will be replaced, including")
-    print("  records belonging to other modules of your team's project.")
+    print("  loyalty, payroll, accounting and other shared records.")
     print("  The full current database will be backed up automatically first.")
     return prompt("  Type RESET to confirm (anything else cancels)") == "RESET"
 
@@ -355,6 +434,7 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
       (keep existing login accounts)
    5. Restore a previous database backup (current database backed up first)
    6. BACKUP + FACTORY RESET entire database (including login accounts)
+   7. Load 8 fictional sample users and profiles (ONLY on request)
    0. Back to main menu
 ''')
         choice = prompt("Select demo option")
@@ -366,6 +446,17 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
                 print("  Demo records saved:", ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in summary.items()))
                 print("  Includes low stock, completed and pending customer orders, and a partial delivery.")
                 inventory_view(svc)
+        elif choice == "7":
+            print("  Import 8 fictional accounts: 1 Owner, 2 Employees, 5 Customers.")
+            print("  Existing accounts and other business data will not be overwritten.")
+            if confirm("Load missing sample users and profiles now?"):
+                _owner_recheck(svc, user)
+                result = load_sample_users(svc, user["userID"])
+                print(f'  Imported {result["created"]} sample accounts; '
+                      f'{result["already_present"]} already existed and were not changed.')
+                print("  Optional sample usernames and passwords are listed in README.md.")
+            else:
+                print("  Cancelled; no sample users created.")
         elif choice == "2":
             if confirm("Create a database backup now?", True):
                 backup_path = backup_database(svc)
@@ -412,7 +503,7 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
 
 
 def profile_menu(svc: ProfileService, user: dict) -> None:
-    """Use Case 5: view -> optionally edit -> validate -> save/cancel."""
+    """View and optionally edit the signed-in user's profile."""
     try:
         profile = svc.view_profile(user['userID'])
     except ProfileNotFoundError as exc:
@@ -423,16 +514,17 @@ def profile_menu(svc: ProfileService, user: dict) -> None:
         print(f"  Profile ID:    {profile.profile_id}")
         print(f"  Username:      {profile.username} (read-only)")
         print(f"  Role:          {profile.role} (read-only)")
-        print(f"  Email:         {profile.email or 'Not provided'} (read-only)")
+        print(f"  Email:         {profile.email or 'Not provided'}")
         print(f"  Name:          {profile.name}")
         print(f"  Phone number:  {profile.phone_number or 'Not provided'}")
         print(f"  Date of birth: {profile.date_of_birth or 'Not provided'}")
         if not confirm('Would you like to update your profile?'):
             return  # view-only happy path: no database write
-        print("  Press Enter to keep a field, or type '-' to clear phone/date of birth.")
+        print("  Press Enter to keep a field, or type '-' to clear email/phone/date of birth.")
         changes = {}
         for key, label, original in (
             ('name', 'Name', profile.name),
+            ('email', 'Email address', profile.email),
             ('phoneNumber', 'Phone number', profile.phone_number),
             ('dateOfBirth', 'Date of birth (YYYY-MM-DD)',
              profile.date_of_birth.isoformat() if profile.date_of_birth else None),
@@ -453,6 +545,7 @@ def profile_menu(svc: ProfileService, user: dict) -> None:
             return  # exceptional flow 5A.3A
         profile = svc.update_profile(user['userID'], changes, expected_version=profile.version)
         user['name'] = profile.name  # menu heading uses shared User.name
+        user['email'] = profile.email
         print('  Profile successfully updated and saved.')
         return
 
@@ -463,8 +556,9 @@ def employees_menu(svc: InventoryService, user: dict) -> None:
     actor_id = user['userID']  # passed from the authenticated login
     while True:
         heading('USER MANAGEMENT | Owner only')
-        table(admin.list_accounts(actor_id), [('userID', 'ID'), ('name', 'Name'),
+        table(admin.list_accounts(actor_id), [('userID', 'User ID'), ('name', 'Name'),
                                                ('username', 'Username'), ('role', 'Role'),
+                                               ('customerID', 'Customer ID'),
                                                ('status', 'Status')])
         print("""
    1. View user details              5. Reset user's password
@@ -483,6 +577,7 @@ def employees_menu(svc: InventoryService, user: dict) -> None:
                 print(f"  Name:          {details['name']}")
                 print(f"  Username:      {details['username']}")
                 print(f"  Role:          {details['role']}")
+                print(f"  Customer ID:   {details['customerID']}")
                 print(f"  Status:        {'Active' if details['accountActive'] else 'Disabled'}")
                 print(f"  Email:         {details['email'] or 'Not provided'}")
                 print(f"  Phone:         {details['phoneNumber'] or 'Not provided'}")
@@ -533,7 +628,7 @@ def employees_menu(svc: InventoryService, user: dict) -> None:
                     continue
                 updated = admin.edit_account(actor_id, uid, changes)
                 if uid == actor_id:
-                    user['name'], user['username'] = updated['name'], updated['username']
+                    user['name'], user['username'], user['email'] = updated['name'], updated['username'], updated['email']
                 print('  Account and profile updated successfully.')
             elif choice == '4':
                 uid = ask_id('User ID to change role')
@@ -585,10 +680,421 @@ def employees_menu(svc: InventoryService, user: dict) -> None:
                 print('  User and profile deleted.')
             else:
                 print('  Invalid selection. Choose 0–7.')
-        except (InventoryError, ProfileError, sqlite3.Error, OSError) as exc:
+        except (InventoryError, ProfileError, LoyaltyError, sqlite3.Error, OSError) as exc:
             print(f'  Could not complete user management action: {exc}')
             if isinstance(exc, sqlite3.IntegrityError):
                 print('  This account is referenced elsewhere; consider disabling it instead.')
+
+def loyalty_customer_menu(svc: LoyaltyService, user: dict) -> None:
+    """Allow a customer to access only their own loyalty account."""
+    svc.ensure_sample_rewards()  # Example CAD discounts, loaded on first loyalty visit.
+    print(f'  Earn {svc.points_per_dollar} points per $1 CAD of eligible spending.')
+    customer_id = svc.customer_id_for_user(user['userID'])
+    try:
+        details = svc.view_loyalty_details(customer_id)
+    except AccountNotFoundError:
+        heading('Join the Loyalty Program')
+        if not confirm('You are not enrolled. Join now?'):
+            return
+        svc.enroll_existing_customer(user['userID'], user['userID'])
+        details = svc.view_loyalty_details(customer_id)
+    _show_loyalty_details(details)
+
+
+def _show_loyalty_details(details: dict) -> None:
+    account = details['account']
+    heading(f"Loyalty | {account['name']} | Customer #{account['customerID']}")
+    print(f"  Current balance: {account['pointsBalance']} points")
+    print(f"  Account status: {account['status']}")
+    print('\n  Available rewards:')
+    table(details['rewards'], [('rewardID', 'Reward ID'), ('name', 'Name'),
+         ('pointsCost', 'Cost in points'), ('discountAmount', 'CAD off'),
+         ('affordable', 'Affordable')])
+    print('\n  Transaction history:')
+    table(details['transactions'], [('loyaltyTransactionID', 'Loyalty ID'),
+          ('orderID', 'Order'), ('pointsEarned', 'Earned'),
+          ('pointsRedeemed', 'Used'), ('balanceAfter', 'Balance'),
+          ('rewardName', 'Reward'), ('createdAt', 'Date')])
+
+
+def loyalty_staff_menu(svc: LoyaltyService, user: dict) -> None:
+    """Loyalty administration for staff, with Owner-only controls where required."""
+    svc.ensure_sample_rewards()  # Show built-in reward examples without Owner setup.
+    while True:
+        heading('Loyalty Program | Staff')
+        print(f'  Earn {svc.points_per_dollar} points per $1 CAD of eligible spending.')
+        print('''  1. Register new walk-in customer
+  2. Enroll an existing Customer user
+  3. Find customer by email/phone
+  4. View balance, available rewards, and history
+  5. Record loyalty for a completed customer order
+  6. List rewards
+  7. Configure rewards (Owner only)
+  8. Suspend/reactivate loyalty account (Owner only)
+  9. List all Customer users (with enrollment status)
+  0. Back to main menu''')
+        choice = prompt('Select an option')
+        if choice == '0':
+            return
+        try:
+            if choice == '1':
+                print('  Creates a Customer/Profile and an active login; at least one contact method is needed.')
+                name = prompt('Customer name')
+                email = prompt('Email (optional)')
+                phone = prompt('Phone number (optional)')
+                dob = prompt('Date of birth (YYYY-MM-DD, optional)')
+                username = prompt('Username (blank to auto-generate walk-in username)')
+                print('  Leave password blank to generate a unique temporary password.')
+                pw = getpass('Password (8+ characters; blank = generated): ')
+                if pw:
+                    pw2 = getpass('Repeat password: ')
+                    if pw != pw2:
+                        raise LoyaltyError('Passwords do not match. Customer was not created.')
+                if confirm('Register in the loyalty program?'):
+                    result = svc.register_customer(user['userID'], name,
+                         email=email or None, phone_number=phone or None,
+                         username=username or None, password=pw or None,
+                         date_of_birth=dob or None)
+                    print(f"  Registered. Customer ID: {result['customerID']}; "
+                          f"User ID: {result['userID']}; current points: {result['pointsBalance']}")
+                    print(f"  Login username: {result['username']}")
+                    if not pw:
+                        print(f"  Temporary password (shown only now): {result['initialPassword']}")
+                        print('  Give this password privately to the customer; an Owner can reset it under 15 → 5.')
+                    else:
+                        print('  Customer can now sign in using the password entered above.')
+            elif choice == '2':
+                user_id = ask_id('Existing Customer User ID (blank to return)', optional=True)
+                if user_id is None:
+                    print('  Returning to the Loyalty Program menu; no changes made.')
+                else:
+                    result = svc.enroll_existing_customer(user_id, user['userID'])
+                    print(f"  Loyalty account ready. Customer ID: {result['customerID']}")
+            elif choice == '3':
+                found = svc.find_customers(user['userID'], prompt('Exact email or phone'))
+                table(found, [('customerID', 'Customer ID'), ('userID', 'User ID'),
+                              ('name', 'Name'), ('email', 'Email'),
+                              ('phoneNumber', 'Phone'), ('pointsBalance', 'Points')])
+                print('  Blank points means the existing customer has not joined loyalty yet.')
+            elif choice == '4':
+                _show_loyalty_details(svc.view_loyalty_details(ask_id('Customer ID')))
+            elif choice == '5':
+                customer_id = ask_id('Customer ID')
+                order_id = ask_id('Completed order ID')
+                details = svc.retrieve_customer_account(customer_id)
+                print(f"  Account verified: {details['name']}, "
+                      f"{details['pointsBalance']} points available.")
+                table(svc.display_available_rewards(customer_id),
+                      [('rewardID', 'Reward ID'), ('name', 'Reward'),
+                       ('pointsCost', 'Points'), ('discountAmount', 'CAD off'),
+                       ('affordable', 'Affordable')])
+                reward_id = ask_id('Reward ID (blank to earn/save points)', optional=True)
+                amount = prompt('Eligible purchase amount (blank = full completed order)')
+                quote = svc.preview_purchase(customer_id, order_id, reward_id=reward_id,
+                                             eligible_amount=amount or None)
+                print(f"  Order total: ${quote.purchase_amount:.2f} CAD; "
+                      f"eligible: ${quote.eligible_amount:.2f} CAD")
+                print(f"  Reward discount: ${quote.discount_amount:.2f} CAD; "
+                      f"amount after discount: ${quote.final_amount:.2f} CAD")
+                print(f"  Points: {quote.previous_balance} - {quote.points_redeemed} "
+                      f"+ {quote.points_earned} = {quote.new_balance}")
+                if confirm('Customer and employee confirm this loyalty action?'):
+                    if reward_id is None:
+                        result = svc.process_eligible_purchase(user['userID'], customer_id,
+                                                               order_id, eligible_amount=amount or None)
+                    else:
+                        result = svc.redeem_reward(user['userID'], customer_id,
+                                                   order_id, reward_id,
+                                                   eligible_amount=amount or None)
+                    print('\n' + svc.generate_receipt(result['loyaltyTransactionID']))
+                else:
+                    print('  Cancelled. No loyalty changes were saved.')
+            elif choice == '6':
+                table(svc.rewards(active_only=False),
+                      [('rewardID', 'Reward ID'), ('name', 'Reward'),
+                       ('pointsCost', 'Points'), ('discountAmount', 'CAD off'),
+                       ('isActive', 'Active')])
+            elif choice == '7':
+                if user['role'] != 'Owner':
+                    raise LoyaltyError('Only an Owner can configure rewards.')
+                action = prompt('Create reward (c), activate (a), deactivate (d)')
+                if action == 'c':
+                    name = prompt('Reward name')
+                    points_cost = ask_id('Points required')
+                    discount = prompt('Discount amount in CAD')
+                    reward_id = svc.create_reward(user['userID'], name, points_cost, discount)
+                    print(f'  Created Reward #{reward_id}.')
+                elif action in ('a', 'd'):
+                    svc.set_reward_active(user['userID'], ask_id('Reward ID'), action == 'a')
+                    print('  Reward availability updated.')
+                else:
+                    print('  No changes made.')
+            elif choice == '8':
+                if user['role'] != 'Owner':
+                    raise LoyaltyError('Only an Owner can change loyalty account status.')
+                customer_id = ask_id('Customer ID')
+                desired = prompt('Suspend (s) or reactivate (a)').lower()
+                if desired in ('s', 'a'):
+                    svc.set_loyalty_account_status(user['userID'], customer_id,
+                                                   'Suspended' if desired == 's' else 'Active')
+                    print('  Loyalty account status updated.')
+                else:
+                    print('  No changes made.')
+            elif choice == '9':
+                table(svc.list_customers(user['userID']),
+                      [('userID', 'User ID'), ('customerID', 'Customer ID'),
+                       ('name', 'Name'), ('username', 'Username'),
+                       ('userStatus', 'Login'), ('loyaltyStatus', 'Loyalty'),
+                       ('pointsBalance', 'Points')])
+                print('  Not enrolled? Use 19 → 2 with their User ID. Use Customer ID when linking orders.')
+            else:
+                print('  Invalid selection.')
+        except (LoyaltyError, sqlite3.Error) as exc:
+            print(f'  Loyalty action not saved: {exc}')
+            if isinstance(exc, sqlite3.Error):
+                print('  The loyalty database change was rolled back. Retry later.')
+        input('\nPress Enter to continue...')
+
+
+def _show_employees(pay: PayrollService, actor_id: int) -> None:
+    table([{'id': e.employeeID, 'name': e.name, 'rate': f'${e.getHourlyRate():,.2f}/h'
+            if e.getHourlyRate() else 'NOT SET'} for e in pay.employees(actor_id)],
+          [('id', 'Employee ID'), ('name', 'Name'), ('rate', 'Hourly rate')])
+
+
+def _show_payroll(pay: PayrollService, actor_id: int, payroll: Payroll) -> None:
+    employees = {e.employeeID: e for e in pay.employees(actor_id)}
+    print(f"  Payroll #{payroll.payrollID} | pay date {payroll.payDate} | {payroll.status}")
+    table([{'id': e.employeeID,
+            'name': employees[e.employeeID].name if e.employeeID in employees else '(inactive)',
+            'rate': (f'${employees[e.employeeID].getHourlyRate():,.2f}/h'
+                     if employees[e.employeeID].getHourlyRate() else 'NOT SET')
+                    if e.employeeID in employees else 'N/A',
+            'hours': e.hoursWorked, 'ot': e.overtimeHours,
+            'ded': '-' if e.deductions is None else f'${e.deductions:,.2f}',
+            'net': '-' if e.netPay is None else f'${e.netPay:,.2f}'} for e in payroll.entries],
+          [('id', 'Emp ID'), ('name', 'Name'), ('rate', 'Hourly rate'),
+           ('hours', 'Hours'), ('ot', 'Overtime'),
+           ('ded', 'Deductions'), ('net', 'Net pay')])
+    if not payroll.entries:
+        print('  No employees on this payroll yet. Use option 2 to enter hours.')
+    elif payroll.status == 'Draft':
+        if any(e.employeeID not in employees for e in payroll.entries):
+            print('  An employee on this draft is inactive. Enable their Employee '
+                  'account in main menu option 15, or remove them with payroll option 8.')
+        if any(e.employeeID in employees and not employees[e.employeeID].getHourlyRate()
+               for e in payroll.entries):
+            print('  An employee has no hourly rate. Set it with option 7 before calculating.')
+    if payroll.status != 'Draft':
+        print('  Hourly rates shown are current rates, not a historical rate record.')
+    if payroll.entries and all(e.netPay is not None for e in payroll.entries):
+        print(f"\n  Total payroll cost (net pay + deductions): ${payroll.totalAmount:,.2f}")
+    elif payroll.status == 'Draft':
+        print("\n  Not calculated yet. Use option 3 to validate and calculate.")
+
+
+def _select_payroll(pay: PayrollService, actor_id: int,
+                    allowed_statuses: tuple[str, ...] | None = None) -> Payroll | None:
+    """Check the selected run immediately; blank ID always returns to the submenu."""
+    if not pay.payrolls(actor_id):
+        print('  No payrolls exist yet. Use option 1 to open a payroll first.')
+        return None
+    while True:
+        payroll_id = ask_id('Payroll ID (blank to return)', optional=True)
+        if payroll_id is None:
+            return None
+        try:
+            payroll = pay.get_payroll(actor_id, payroll_id)
+        except PayrollError as exc:
+            print(f'  {exc} Select an existing payroll ID, or leave blank to return.')
+            continue
+        if allowed_statuses and payroll.status not in allowed_statuses:
+            if allowed_statuses == ('Draft',):
+                print(f'  Payroll #{payroll_id} is {payroll.status}. Only Draft payrolls can '
+                      'be changed or recalculated.')
+            elif allowed_statuses == ('Approved',):
+                print(f'  Payroll #{payroll_id} is {payroll.status}. To record payment, '
+                      'enter hours (2), calculate (3) and approve (4) first. '
+                      'A Paid payroll has already been recorded.')
+            else:
+                print(f'  Payroll #{payroll_id} is {payroll.status}. Pay stubs become '
+                      'available after calculation (3) and approval (4).')
+            print('  Choose another payroll ID, or leave blank to return.')
+            continue
+        return payroll
+
+
+def payroll_menu(svc: InventoryService, user: dict) -> None:
+    """Owner-only payroll management menu."""
+    if user['role'] != 'Owner':
+        print("  Payroll is available to Owners only.")
+        return
+    pay = PayrollService(svc.db_path)
+    actor = user['userID']
+    while True:
+        heading('PAYROLL | Owner only')
+        runs = pay.payrolls(actor)
+        for run in runs:
+            run['total'] = f"${run['totalAmount']:,.2f}" if run['totalAmount'] else '-'
+        table(runs, [('payrollID', 'ID'), ('payDate', 'Pay date'), ('status', 'Status'),
+                     ('employees', 'Employees'), ('total', 'Total cost')])
+        print(f"""
+   1. Open payroll for a pay date        5. Record payment and payroll expense
+   2. Enter or correct employee hours    6. View pay stubs
+   3. Validate, calculate and review     7. Set employee hourly rate
+   4. Approve payroll                    8. Remove employee from a draft payroll
+                                         0. Return to main menu
+  Pay rules: overtime x{OVERTIME_MULTIPLIER}, flat {int(DEDUCTION_RATE * 100)}% deductions (simplified).
+""")
+        choice = prompt('Select payroll option')
+        try:
+            if choice == '0':
+                return
+            if choice == '1':
+                pay_date = prompt('Pay date (YYYY-MM-DD; blank to cancel)')
+                if not pay_date:
+                    print('  Cancelled; no payroll opened.')
+                    continue
+                if confirm(f'Open a new payroll for {pay_date}?', True):
+                    print(f"  Payroll #{pay.open_payroll(actor, pay_date)} opened as Draft.")
+            elif choice == '2':
+                payroll = _select_payroll(pay, actor, ('Draft',))
+                if payroll is None:
+                    continue
+                _show_payroll(pay, actor, payroll)
+                employees = {e.employeeID: e for e in pay.employees(actor)}
+                if not employees:
+                    print('  No active employees. Use main menu option 15 to create or '
+                          'enable an Employee account first.')
+                    continue
+                print('\n  Active employees available to add or update:')
+                _show_employees(pay, actor)
+                print("  Enter an employee ID to add/correct hours; blank returns to payroll.")
+                while True:
+                    employee_id = ask_id('Employee ID (blank to finish)', optional=True)
+                    if employee_id is None:
+                        break
+                    if employee_id not in employees:
+                        print(f'  Employee #{employee_id} is not active or does not exist. '
+                              'Choose an ID from the active employee list.')
+                        continue
+                    hours = ask_number('Regular hours worked (blank to cancel this employee)',
+                                       allow_zero=True, optional=True)
+                    if hours is None:
+                        print('  No changes saved for this employee.')
+                        continue
+                    overtime = ask_number('Overtime hours', allow_zero=True, default=0)
+                    try:
+                        pay.enter_hours(actor, payroll.payrollID, employee_id, hours, overtime)
+                    except PayrollError as exc:
+                        print(f'  Hours not saved: {exc}')
+                        continue
+                    print('  Hours saved. Updated payroll draft:')
+                    _show_payroll(pay, actor, pay.get_payroll(actor, payroll.payrollID))
+                    if not employees[employee_id].getHourlyRate():
+                        print('  This employee has no hourly rate. Use option 7 before '
+                              'calculating payroll.')
+            elif choice == '3':
+                payroll = _select_payroll(pay, actor, ('Draft',))
+                if payroll is None:
+                    continue
+                problems = pay.check_hours(actor, payroll.payrollID)
+                if problems:
+                    print('  These hours need correcting before pay can be calculated:')
+                    for problem in problems:
+                        print(f'   - {problem}')
+                    print('  Use option 2 to correct hours, 7 to set a rate or 8 to remove someone.')
+                else:
+                    _show_payroll(pay, actor, pay.calculate(actor, payroll.payrollID))
+            elif choice == '4':
+                payroll = _select_payroll(pay, actor, ('Draft',))
+                if payroll is None:
+                    continue
+                _show_payroll(pay, actor, payroll)
+                if not payroll.entries or any(e.netPay is None for e in payroll.entries):
+                    print('  Not ready for approval. Enter/correct hours (2), set missing '
+                          'rates (7), then validate and calculate (3) first.')
+                    continue
+                if confirm('Approve this payroll summary?'):
+                    pay.approve(actor, payroll.payrollID)
+                    print('  Payroll approved. Pay stubs are now available (option 6).')
+                else:
+                    print('  Not approved. Correct the hours (2) or rates (7), then recalculate (3).')
+            elif choice == '5':
+                payroll = _select_payroll(pay, actor, ('Approved',))
+                if payroll is None:
+                    continue
+                _show_payroll(pay, actor, payroll)
+                if confirm('Have these employees been paid? This records the expense and cannot be undone'):
+                    transaction_id = pay.record_expense(actor, payroll.payrollID)
+                    print(f'  Payroll marked Paid. Expense posted to the Accounting Ledger '
+                          f'as transaction #{transaction_id}.')
+            elif choice == '6':
+                payroll = _select_payroll(pay, actor, ('Approved', 'Paid'))
+                if payroll is None:
+                    continue
+                for stub in pay.pay_stubs(actor, payroll.payrollID):
+                    print('\n' + stub + '\n' + '-' * 45)
+            elif choice == '7':
+                employees = pay.employees(actor)
+                if not employees:
+                    print('  No active employees. Use main menu option 15 to create or '
+                          'enable an Employee account first.')
+                    continue
+                _show_employees(pay, actor)
+                employee_ids = {e.employeeID for e in employees}
+                while True:
+                    employee_id = ask_id('Employee ID (blank to finish)', optional=True)
+                    if employee_id is None:
+                        break
+                    if employee_id not in employee_ids:
+                        print(f'  Employee #{employee_id} is not active or does not exist. '
+                              'Choose an ID from the employee list.')
+                        continue
+                    rate = ask_number('New hourly rate ($; blank to cancel employee)', optional=True)
+                    if rate is None:
+                        print('  No changes saved for this employee.')
+                        continue
+                    try:
+                        employee = pay.set_hourly_rate(actor, employee_id, rate)
+                    except PayrollError as exc:
+                        print(f'  Rate not saved: {exc}')
+                        continue
+                    print(f"  {employee.name}'s rate is now ${employee.getHourlyRate():,.2f}/h. "
+                          "Draft payrolls that include them must be recalculated.")
+                    employees = pay.employees(actor)
+                    employee_ids = {e.employeeID for e in employees}
+                    _show_employees(pay, actor)
+            elif choice == '8':
+                payroll = _select_payroll(pay, actor, ('Draft',))
+                if payroll is None:
+                    continue
+                _show_payroll(pay, actor, payroll)
+                while payroll.entries:
+                    employee_id = ask_id('Employee ID to remove (blank to finish)', optional=True)
+                    if employee_id is None:
+                        break
+                    if employee_id not in {e.employeeID for e in payroll.entries}:
+                        print(f'  Employee #{employee_id} is not on this payroll. '
+                              'Choose an ID from the draft above.')
+                        continue
+                    if not confirm('Remove this employee from the draft payroll?'):
+                        print('  Not removed.')
+                        continue
+                    try:
+                        pay.remove_employee(actor, payroll.payrollID, employee_id)
+                    except PayrollError as exc:
+                        print(f'  Not removed: {exc}')
+                        continue
+                    print('  Removed. Updated payroll draft:')
+                    payroll = pay.get_payroll(actor, payroll.payrollID)
+                    _show_payroll(pay, actor, payroll)
+            else:
+                print('  Invalid selection.')
+                continue
+        except (PayrollError, sqlite3.Error) as exc:
+            print(f'\n  Not saved: {exc}')
+        input('\nPress Enter to continue...')
 
 def menu(svc: InventoryService, user: dict) -> None:
     while True:
@@ -603,33 +1109,37 @@ def menu(svc: InventoryService, user: dict) -> None:
         user.update(live[0])
         if user['role'] == 'Customer':
             heading(f"ONIGIRI SHOP | Customer | {user['name']}")
-            print("  18. My Profile    17. Log out    0. Exit")
+            print("  18. My Profile    19. My Loyalty    17. Log out    0. Exit")
             selection = prompt("Select an option")
             if selection == "0":
                 raise SystemExit(0)
             if selection == "17":
                 print("  Logged out.")
                 return
-            if selection != "18":
+            if selection not in ("18", "19"):
                 print("  Invalid selection. Customer inventory administration is not available.")
                 continue
             try:
-                profile_menu(ProfileService(svc.db_path), user)
-            except (ProfileError, sqlite3.Error, OSError) as exc:
-                print(f"  Profile could not be saved: {exc}")
+                if selection == "18":
+                    profile_menu(ProfileService(svc.db_path), user)
+                else:
+                    loyalty_customer_menu(LoyaltyService(svc.db_path), user)
+            except (ProfileError, LoyaltyError, sqlite3.Error, OSError) as exc:
+                print(f"  Request could not be completed: {exc}")
             input("\nPress Enter to return to the menu...")
             continue
-        heading(f"ONIGIRI SHOP | Inventory Management | {user['name']} ({user['role']})")
+        heading(f"ONIGIRI SHOP | Management System | {user['name']} ({user['role']})")
         print('''
-   1. View inventory                  10. Review low-stock alerts
-   2. Add ingredient                  11. Create inventory purchase order
-   3. Set reorder level               12. View inventory purchase orders
-   4. Manually adjust inventory       13. View transaction history
-   5. Receive supplier delivery       14. Manage suppliers
-   6. Create/edit recipe              15. Manage users (Owner)
-   7. View recipes                    16. Demo / backup / reset (Owner)
-   8. Create customer order           17. Log out
-   9. View/complete customer orders   18. My Profile
+   1. View inventory                  11. Create inventory purchase order
+   2. Add ingredient                  12. View inventory purchase orders
+   3. Set reorder level               13. View transaction history
+   4. Manually adjust inventory       14. Manage suppliers
+   5. Receive supplier delivery       15. Manage users (Owner)
+   6. Create/edit recipe              16. Demo / backup / reset (Owner)
+   7. View recipes                    17. Log out
+   8. Create customer order           18. My Profile
+   9. View/complete customer orders   19. Loyalty Program
+  10. Review low-stock alerts         20. Payroll (Owner)
                                       0. Exit
 ''')
         selection = prompt("Select an option")
@@ -656,6 +1166,8 @@ def menu(svc: InventoryService, user: dict) -> None:
             "15": lambda: employees_menu(svc, user),
             "16": lambda: demo_menu(svc, user),
             "18": lambda: profile_menu(ProfileService(svc.db_path), user),
+            "19": lambda: loyalty_staff_menu(LoyaltyService(svc.db_path), user),
+            "20": lambda: payroll_menu(svc, user),
         }
         action = actions.get(selection)
         if not action:
@@ -665,7 +1177,8 @@ def menu(svc: InventoryService, user: dict) -> None:
             needs_login = action()
             if needs_login is True:
                 return
-        except (InventoryError, ProfileError, sqlite3.Error, OSError) as exc:
+        except (InventoryError, ProfileError, LoyaltyError, PayrollError,
+                sqlite3.Error, OSError) as exc:
             print(f"\n  Not saved: {exc}")
             if isinstance(exc, sqlite3.Error):
                 print("  The database operation was rolled back. Please try again.")
@@ -673,7 +1186,7 @@ def menu(svc: InventoryService, user: dict) -> None:
 
 
 def main() -> None:
-    heading("BTM 495 | Onigiri Shop Inventory Proof of Concept")
+    heading("The Onigiri Shop | Management System")
     svc = InventoryService()
     from inventory_db import DEFAULT_DB
     if svc.created_database:

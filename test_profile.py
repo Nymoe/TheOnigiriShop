@@ -1,4 +1,4 @@
-"""Use Case 5 acceptance tests, including its alternate/exception flows."""
+"""Profile acceptance tests, including validation and error handling."""
 from datetime import date, timedelta
 from pathlib import Path
 import sqlite3
@@ -69,7 +69,7 @@ class ProfileUseCaseTests(unittest.TestCase):
         p = self.profiles.update_profile(self.customer_id, {'phoneNumber': '', 'dateOfBirth': ''})
         self.assertIsNone(p.phone_number)
         self.assertIsNone(p.date_of_birth)
-        for key in ('username', 'role', 'email', 'userID', 'profileID', 'passwordHash'):
+        for key in ('username', 'role', 'userID', 'profileID', 'passwordHash'):
             with self.subTest(key=key), self.assertRaises(ProfileError):
                 self.profiles.update_profile(self.customer_id, {key: 'illegal'})
         self.assertEqual(self.profiles.view_profile(self.customer_id).username, 'customer')
@@ -150,7 +150,7 @@ class ProfileUseCaseTests(unittest.TestCase):
         user = self.inventory.login('employee', 'password-staff')
         before = self.profiles.view_profile(self.employee_id)
         with patch('inventory_cli.confirm', side_effect=[True, False]), \
-             patch('builtins.input', side_effect=['Revised Name', '', '']):
+             patch('builtins.input', side_effect=['Revised Name', '', '', '']):
             profile_menu(self.profiles, user)
         self.assertEqual(self.profiles.view_profile(self.employee_id), before)
 
@@ -158,7 +158,7 @@ class ProfileUseCaseTests(unittest.TestCase):
         from inventory_cli import profile_menu
         user = self.inventory.login('employee', 'password-staff')
         with patch('inventory_cli.confirm', side_effect=[True, True]), \
-             patch('builtins.input', side_effect=['Staff Revised', '5145550144', '1997-05-09']):
+             patch('builtins.input', side_effect=['Staff Revised', '', '5145550144', '1997-05-09']):
             profile_menu(self.profiles, user)
         self.assertEqual(self.profiles.view_profile(self.employee_id).name, 'Staff Revised')
         self.assertEqual(user['name'], 'Staff Revised')

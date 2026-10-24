@@ -349,7 +349,8 @@ class InventoryService:
                              WHERE ri.recipeID=? ORDER BY i.ingredientName''', (_ident(recipe_id),))
 
     # ----- CUSTOMER ORDERS -----
-    def create_customer_order(self, recipes: dict[int, int], user_id: int) -> int:
+    def create_customer_order(self, recipes: dict[int, int], user_id: int,
+                              customer_id: int | None = None) -> int:
         if not recipes:
             raise InventoryError("Select at least one recipe.")
         clean: dict[int, int] = {}
@@ -361,15 +362,17 @@ class InventoryService:
             clean[recipe_id] = count_num
         with transaction(self.db_path) as db:
             _must_get(db, "User", "userID", user_id)
+            if customer_id is not None:
+                self._validate_order_customer(db, customer_id)
             total = 0.0
             for recipe_id, count in clean.items():
                 recipe = _must_get(db, "Recipe", "recipeID", recipe_id)
                 if not db.execute('SELECT 1 FROM RecipeIngredient WHERE recipeID=?', (recipe_id,)).fetchone():
                     raise InventoryError(f'{recipe["name"]} needs ingredients before it can be ordered.')
                 total += recipe["price"] * count
-            order_id = db.execute('INSERT INTO "Order"(orderDate, totalAmount, status, createdByUserID) '
-                                  'VALUES(?, ?, ?, ?)',
-                                  (_date_today(), round(total, 2), "Pending", user_id)).lastrowid
+            order_id = db.execute('INSERT INTO "Order"(orderDate, totalAmount, status, createdByUserID, customerID) '
+                                  'VALUES(?, ?, ?, ?, ?)',
+                                  (_date_today(), round(total, 2), "Pending", user_id, customer_id)).lastrowid
             for recipe_id, count in clean.items():
                 db.execute('INSERT INTO OrderRecipe(orderID, recipeID, quantity) VALUES(?, ?, ?)',
                            (order_id, recipe_id, count))
@@ -377,10 +380,37 @@ class InventoryService:
 
     def customer_orders(self) -> list[dict]:
         # Include existing broad-system orders. POC-created orders have OrderRecipe rows.
-        return self._read('''SELECT o.orderID, o.orderDate, o.totalAmount, o.status,
+        return self._read('''SELECT o.orderID, o.orderDate, o.totalAmount, o.status, o.customerID,
                                     COUNT(orcp.recipeID) AS recipesCount
                              FROM "Order" o LEFT JOIN OrderRecipe orcp ON o.orderID=orcp.orderID
                              GROUP BY o.orderID ORDER BY o.orderID DESC''')
+
+    def order_details(self, order_id: int) -> dict:
+        rows = self._read('SELECT orderID, totalAmount, status, customerID FROM "Order" WHERE orderID=?',
+                          (_ident(order_id, 'Order ID'),))
+        if not rows:
+            raise InventoryError(f'Order #{order_id} was not found.')
+        return rows[0]
+
+    @staticmethod
+    def _validate_order_customer(db: sqlite3.Connection, customer_id: int) -> None:
+        row = db.execute('''SELECT u.role,u.accountActive FROM Customer c
+                            JOIN "User" u ON u.userID=c.userID WHERE c.customerID=?''',
+                         (_ident(customer_id, 'Customer ID'),)).fetchone()
+        if not row or row['role'] != 'Customer':
+            raise InventoryError('Customer ID was not found. Use Loyalty option 9 to find customer IDs, '
+                                 'or option 1 to register a walk-in.')
+        if not row['accountActive']:
+            raise InventoryError('That Customer account is disabled. Ask an Owner to enable it under option 15.')
+
+    def set_order_customer(self, order_id: int, customer_id: int) -> None:
+        """Associate a customer with a pending order before it is completed."""
+        with transaction(self.db_path) as db:
+            order = _must_get(db, 'Order', 'orderID', _ident(order_id, 'Order ID'))
+            if order['status'] != 'Pending':
+                raise InventoryError('Customer assignment can only be changed while the order is Pending.')
+            self._validate_order_customer(db, customer_id)
+            db.execute('UPDATE "Order" SET customerID=? WHERE orderID=?', (customer_id, order_id))
 
     def order_recipes(self, order_id: int) -> list[dict]:
         return self._read('''SELECT r.name, r.recipeID, o.quantity, r.price
@@ -390,37 +420,42 @@ class InventoryService:
     def complete_customer_order(self, order_id: int, user_id: int) -> dict:
         order_id = _ident(order_id, "Order ID")
         with transaction(self.db_path) as db:
-            order = _must_get(db, "Order", "orderID", order_id)
-            if order["status"] != "Pending":
-                raise InventoryError("Only a pending order can be completed.")
-            lines = list(db.execute('''SELECT ori.recipeID, ori.quantity, r.name
+            return self._complete_order_in_transaction(db, order_id, user_id)
+
+    def _complete_order_in_transaction(self, db: sqlite3.Connection, order_id: int,
+                                       user_id: int) -> dict:
+        """Shared stock update, used by normal and atomic loyalty completion."""
+        order = _must_get(db, "Order", "orderID", order_id)
+        if order["status"] != "Pending":
+            raise InventoryError("Only a pending order can be completed.")
+        lines = list(db.execute('''SELECT ori.recipeID, ori.quantity, r.name
                                        FROM OrderRecipe ori JOIN Recipe r ON r.recipeID=ori.recipeID
                                        WHERE ori.orderID=?''', (order_id,)))
-            if not lines:
-                raise InventoryError("This order has no recipes. Existing external orders cannot be completed here.")
-            required: dict[int, float] = defaultdict(float)
-            for recipe in lines:
-                ingredients = list(db.execute('SELECT ingredientID, quantityRequired FROM RecipeIngredient '
-                                              'WHERE recipeID=?', (recipe["recipeID"],)))
-                if not ingredients:
-                    raise InventoryError(f'Recipe {recipe["name"]} has no ingredients.')
-                for ingredient in ingredients:
-                    required[ingredient["ingredientID"]] += ingredient["quantityRequired"] * recipe["quantity"]
-            shortages = []
-            for ingredient_id, qty in required.items():
-                ingredient = _must_get(db, "InventoryItem", "ingredientID", ingredient_id)
-                if ingredient["quantityOnHand"] + EPSILON < qty:
-                    shortages.append(
-                        f'{ingredient["ingredientName"]}: need {qty:g} {ingredient["unit"]}, '
-                        f'have {ingredient["quantityOnHand"]:g}'
-                    )
-            if shortages:
-                raise InsufficientStockError(shortages)
-            for ingredient_id, qty in required.items():
-                self._apply_change(db, ingredient_id, -qty, user_id, "Customer Order",
-                                   customer_order_id=order_id, notes=f"Order #{order_id} completed")
-            db.execute('UPDATE "Order" SET status=? WHERE orderID=?', ("Completed", order_id))
-            return {"order_id": order_id, "deductions": dict(required)}
+        if not lines:
+            raise InventoryError("This order has no recipes. Existing external orders cannot be completed here.")
+        required: dict[int, float] = defaultdict(float)
+        for recipe in lines:
+            ingredients = list(db.execute('SELECT ingredientID, quantityRequired FROM RecipeIngredient '
+                                          'WHERE recipeID=?', (recipe["recipeID"],)))
+            if not ingredients:
+                raise InventoryError(f'Recipe {recipe["name"]} has no ingredients.')
+            for ingredient in ingredients:
+                required[ingredient["ingredientID"]] += ingredient["quantityRequired"] * recipe["quantity"]
+        shortages = []
+        for ingredient_id, qty in required.items():
+            ingredient = _must_get(db, "InventoryItem", "ingredientID", ingredient_id)
+            if ingredient["quantityOnHand"] + EPSILON < qty:
+                shortages.append(
+                    f'{ingredient["ingredientName"]}: need {qty:g} {ingredient["unit"]}, '
+                    f'have {ingredient["quantityOnHand"]:g}'
+                )
+        if shortages:
+            raise InsufficientStockError(shortages)
+        for ingredient_id, qty in required.items():
+            self._apply_change(db, ingredient_id, -qty, user_id, "Customer Order",
+                               customer_order_id=order_id, notes=f"Order #{order_id} completed")
+        db.execute('UPDATE "Order" SET status=? WHERE orderID=?', ("Completed", order_id))
+        return {"order_id": order_id, "deductions": dict(required)}
 
     def cancel_customer_order(self, order_id: int) -> None:
         with transaction(self.db_path) as db:
