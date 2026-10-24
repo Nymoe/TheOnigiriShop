@@ -1,0 +1,234 @@
+
+from datetime import date, timedelta
+from statistics import mean
+from inventory_db import connect
+
+
+class BusinessData:
+    def __init__(self, data_type, db_path=None):
+        self.data_type = data_type
+        self.db_path = db_path
+
+    def retrieve_data(self):
+        queries = {
+            "Sales": '''SELECT substr(orderDate, 1, 10) AS day, COUNT(*) AS amount
+                        FROM "Order" WHERE status='Completed' AND orderDate IS NOT NULL
+                        GROUP BY substr(orderDate, 1, 10) ORDER BY day''',
+            "Financial": '''SELECT substr(orderDate, 1, 10) AS day, SUM(totalAmount) AS amount
+                            FROM "Order" WHERE status='Completed' AND orderDate IS NOT NULL
+                            AND totalAmount IS NOT NULL
+                            GROUP BY substr(orderDate, 1, 10) ORDER BY day''',
+        }
+        if self.data_type not in queries:
+            raise ValueError("Unknown trend type")
+        db = connect(self.db_path)
+        try:
+            records = db.execute(queries[self.data_type]).fetchall()
+        finally:
+            db.close()
+        history = []
+        for row in records:
+            try:
+                day = date.fromisoformat(row['day'])
+            except (ValueError, TypeError):
+                continue
+            history.append({'date': day.isoformat(), 'value': float(row['amount'])})
+        return history
+
+
+class IngredientData:
+    '''Read actual ingredient consumption quantities from customer orders.'''
+
+    def __init__(self, ingredient_id, db_path=None):
+        self.ingredient_id = ingredient_id
+        self.db_path = db_path
+        self.data_type = 'Inventory'
+
+    @staticmethod
+    def list_ingredients(db_path=None):
+        db = connect(db_path)
+        try:
+            return db.execute('''SELECT ingredientID, ingredientName, quantityOnHand,
+                                        reorderLevel, unit FROM InventoryItem
+                                 ORDER BY ingredientName, ingredientID''').fetchall()
+        finally:
+            db.close()
+
+    def retrieve_data(self):
+        db = connect(self.db_path)
+        try:
+            rows = db.execute('''
+                SELECT substr(transactionDate, 1, 10) AS day,
+                       SUM(-quantity) AS amount
+                FROM InventoryTransaction
+                WHERE ingredientID = ? AND transactionType = 'Customer Order'
+                  AND quantity < 0 AND transactionDate IS NOT NULL
+                GROUP BY substr(transactionDate, 1, 10)
+                ORDER BY day
+            ''', (self.ingredient_id,)).fetchall()
+        finally:
+            db.close()
+        history = []
+        for row in rows:
+            try:
+                day = date.fromisoformat(row['day'])
+            except (ValueError, TypeError):
+                continue
+            history.append({'date': day.isoformat(), 'value': float(row['amount'])})
+        return history
+
+
+class TrendPrediction:
+    MIN_OBSERVATIONS = 3
+
+    def __init__(self, business_data):
+        self.business_data = business_data
+        self.trend_type = business_data.data_type
+        self.predicted_value = None
+        self.prediction_date = None
+
+    def generate_trend(self, history=None):
+        history = self.business_data.retrieve_data() if history is None else history
+        if len(history) < self.MIN_OBSERVATIONS:
+            return None
+        previous = mean(item['value'] for item in history[-3:-1])
+        latest = history[-1]['value']
+        return 'Increasing' if latest > previous else 'Decreasing' if latest < previous else 'Stable'
+
+    def generate_prediction(self, history=None):
+        history = self.business_data.retrieve_data() if history is None else history
+        if len(history) < self.MIN_OBSERVATIONS:
+            self.predicted_value = None
+            self.prediction_date = None
+            return None
+        self.predicted_value = round(mean(item['value'] for item in history[-3:]), 2)
+        self.prediction_date = (date.fromisoformat(history[-1]['date']) + timedelta(days=1)).isoformat()
+        return self.predicted_value
+
+
+class TrendPredictingDashboard:
+    LABELS = {
+        'Sales': 'completed orders',
+        'Inventory': 'units consumed',
+        'Financial': 'CAD revenue (not profit)',
+    }
+
+    def __init__(self, db_path=None):
+        self.db_path = db_path
+        self.selected_type = 'Sales'
+
+    def display_history(self, history, data_type):
+        print(f"\nHistorical {data_type.lower()} data:")
+        if not history:
+            print('No historical records available.')
+        for item in history:
+            print(f"  {item['date']}: {item['value']:,.2f} {self.LABELS[data_type]}")
+
+    def display_trends(self, prediction, history):
+        print('Trend:', prediction.generate_trend(history) or 'Unavailable (insufficient history)')
+
+    def display_prediction(self, prediction, history):
+        value = prediction.generate_prediction(history)
+        if value is None:
+            print('Prediction unavailable: at least 3 recorded dates are required.')
+        else:
+            print(f'Forecast for {prediction.prediction_date}: {value:,.2f} '
+                  f'{self.LABELS[prediction.trend_type]}')
+            print('Method: average of the last 3 recorded dates; illustrative only.')
+
+    def run_inventory(self):
+        try:
+            ingredients = IngredientData.list_ingredients(self.db_path)
+        except Exception as exc:
+            print(f'Unable to load ingredients: {exc}')
+            return
+        if not ingredients:
+            print('No ingredients found in inventory.')
+            return
+        while True:
+            print('\n=== Ingredient Forecasting ===')
+            for index, item in enumerate(ingredients, 1):
+                print(f"{index}. {item['ingredientName']} ({item['unit'] or 'unit'})")
+            print('0. Return to trend dashboard')
+            choice = input('Select ingredient: ').strip()
+            if choice in ('0', 'q'):
+                return
+            if not choice.isdigit() or not 1 <= int(choice) <= len(ingredients):
+                print('Invalid selection.')
+                continue
+            item = ingredients[int(choice) - 1]
+            unit = item['unit'] or 'unit'
+            source = IngredientData(item['ingredientID'], self.db_path)
+            try:
+                history = source.retrieve_data()
+            except Exception as exc:
+                print(f'Unable to load consumption history: {exc}')
+                continue
+            print(f"\n=== {item['ingredientName']} Forecast ===")
+            stock = float(item['quantityOnHand'] or 0)
+            reorder = float(item['reorderLevel'] or 0)
+            print(f'Current stock: {stock:,.2f} {unit}')
+            print(f'Reorder level: {reorder:,.2f} {unit}')
+            if not history:
+                print('No recorded customer-order consumption for this ingredient.')
+                continue
+            print('Historical consumption:')
+            for entry in history:
+                print(f"  {entry['date']}: {entry['value']:,.2f} {unit}")
+            average = mean(entry['value'] for entry in history)
+            print(f'Average per recorded consumption day: {average:,.2f} {unit}')
+            if len(history) < TrendPrediction.MIN_OBSERVATIONS:
+                print('At least 3 recorded consumption dates are needed for forecasting.')
+                continue
+            if input('Proceed with trend analysis? (y/n): ').strip().lower() != 'y':
+                print('Analysis cancelled.')
+                continue
+            prediction = TrendPrediction(source)
+            daily = prediction.generate_prediction(history)
+            print(f'Trend: {prediction.generate_trend(history)}')
+            print(f'Next recorded-day forecast: {daily:,.2f} {unit}')
+            print(f'7-day estimate (assuming daily use): {daily * 7:,.2f} {unit}')
+            if daily > 0:
+                print(f'Estimated stock coverage: {stock / daily:.1f} days (assuming daily use)')
+                if stock < daily * 7:
+                    print('Recommendation: stock may be insufficient for 7 days; consider replenishment.')
+                elif stock <= reorder:
+                    print('Recommendation: current stock is at or below reorder level.')
+                else:
+                    print('Stock appears sufficient for 7 days at the estimated rate.')
+            print('Note: estimates use the last 3 recorded consumption dates, not a calendar-day average.')
+
+    def run(self):
+        while True:
+            print('\n=== Trend Predicting Dashboard ===')
+            print('1. Sales (completed order count)')
+            print('2. Inventory (forecast by ingredient)')
+            print('3. Financial (completed-order revenue)')
+            print('0. Return to main menu')
+            selection = input('Choose an option: ').strip().lower()
+            if selection in ('0', 'q'):
+                return
+            options = {'1': 'Sales', '2': 'Inventory', '3': 'Financial'}
+            if selection not in options:
+                print('Invalid selection.')
+                continue
+            self.selected_type = options[selection]
+            if self.selected_type == 'Inventory':
+                self.run_inventory()
+                continue
+            source = BusinessData(self.selected_type, self.db_path)
+            try:
+                history = source.retrieve_data()
+            except Exception as exc:
+                print(f'Unable to retrieve business data: {exc}')
+                continue
+            self.display_history(history, self.selected_type)
+            if len(history) < TrendPrediction.MIN_OBSERVATIONS:
+                print('At least 3 distinct dates with records are required for a forecast.')
+                continue
+            if input('Proceed with trend analysis? (y/n): ').strip().lower() != 'y':
+                print('Analysis cancelled.')
+                continue
+            prediction = TrendPrediction(source)
+            self.display_trends(prediction, history)
+            self.display_prediction(prediction, history)
