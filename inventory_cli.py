@@ -8,6 +8,7 @@ from inventory_service import InventoryError, InventoryService, InsufficientStoc
 from demo_tools import backup_database, list_backups, reset_database, restore_database
 from profile_service import ProfileError, ProfileNotFoundError, ProfileService
 from user_management_service import UserManagementService
+from trend_prediction_service import TrendPredictingDashboard
 
 
 def heading(text: str) -> None:
@@ -630,6 +631,7 @@ def menu(svc: InventoryService, user: dict) -> None:
    7. View recipes                    16. Demo / backup / reset (Owner)
    8. Create customer order           17. Log out
    9. View/complete customer orders   18. My Profile
+                                      19. Trend Predicting Dashboard
                                       0. Exit
 ''')
         selection = prompt("Select an option")
@@ -656,6 +658,7 @@ def menu(svc: InventoryService, user: dict) -> None:
             "15": lambda: employees_menu(svc, user),
             "16": lambda: demo_menu(svc, user),
             "18": lambda: profile_menu(ProfileService(svc.db_path), user),
+            "19": lambda: TrendPredictingDashboard(svc.db_path).run(),
         }
         action = actions.get(selection)
         if not action:
