@@ -1,8 +1,8 @@
-"""Use Case 5: Profile Management for the shared Onigiri Shop system.
+"""Profile management for the shared Onigiri Shop system.
 
 The authenticated application supplies its CURRENT userID; no separate identity,
 login store, loyalty balance, or payroll details are managed here. The service is
-UI-independent so other use cases can reuse the same profile records.
+UI-independent so other modules can reuse the same profile records.
 """
 from __future__ import annotations
 
@@ -22,14 +22,14 @@ class ProfileError(ValueError):
 
 
 class ProfileNotFoundError(ProfileError):
-    """Exceptional flow 3A: the user's profile does not exist."""
+    """The user's profile does not exist."""
 
 
 class ProfileConflictError(ProfileError):
     """The displayed profile has changed since it was opened."""
 
 
-_EDITABLE_FIELDS = frozenset({'name', 'phoneNumber', 'dateOfBirth'})
+_EDITABLE_FIELDS = frozenset({'name', 'email', 'phoneNumber', 'dateOfBirth'})
 _PHONE_CHARS = re.compile(r'^[+\d\s().-]+$')
 
 
@@ -62,6 +62,24 @@ def _validate_phone(raw: object) -> str | None:
     if len(phone) > 25 or not 7 <= digits <= 15 or not _PHONE_CHARS.fullmatch(phone):
         raise ProfileError('Phone number must contain 7–15 digits and valid punctuation.')
     return phone
+
+
+def _validate_email(raw: object) -> str | None:
+    """Email is a shared User field, editable through the user's own profile.
+
+    Match the account-creation rules without importing inventory_service,
+    which itself imports profile_service.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ProfileError('Email must be text.')
+    email = raw.strip() or None
+    if email and (len(email) > 254 or email.count('@') != 1 or
+                  any(c.isspace() or ord(c) < 32 for c in email) or
+                  not all(email.split('@')) or '.' not in email.split('@')[1]):
+        raise ProfileError('Enter a valid email address, or clear the email field.')
+    return email
 
 
 def _validate_dob(raw: object) -> date | None:
@@ -98,23 +116,23 @@ class Profile:
     email: str | None
 
     def validate_changes(self, changes: Mapping[str, object]) -> 'Profile':
-        """Validate editable data without touching stored state (CRC responsibility)."""
+        """Validate editable data without touching stored state."""
         unknown = set(changes) - _EDITABLE_FIELDS
         if unknown:
-            raise ProfileError('Only name, phoneNumber and dateOfBirth may be edited.')
+            raise ProfileError('Only name, email, phoneNumber and dateOfBirth may be edited.')
         if not changes:
             raise ProfileError('No profile changes were submitted.')
         return replace(
             self,
             name=_validate_name(changes['name']) if 'name' in changes else self.name,
+            email=_validate_email(changes['email']) if 'email' in changes else self.email,
             phone_number=_validate_phone(changes['phoneNumber'])
             if 'phoneNumber' in changes else self.phone_number,
             date_of_birth=_validate_dob(changes['dateOfBirth'])
             if 'dateOfBirth' in changes else self.date_of_birth,
         )
 
-    # The CRC card describes updateProfile() as a responsibility. Persistence
-    # belongs to ProfileService; the domain class handles candidate changes.
+    # Persistence belongs to ProfileService; this model validates candidate changes.
     def update_profile(self, changes: Mapping[str, object]) -> 'Profile':
         return self.validate_changes(changes)
 
@@ -182,5 +200,6 @@ class ProfileService:
                   current_user_id))
             # Other modules and the current login screen already read User.name.
             # Keep it consistent with the profile in the same transaction.
-            db.execute('UPDATE "User" SET name=? WHERE userID=?', (updated.name, current_user_id))
+            db.execute('UPDATE "User" SET name=?,email=? WHERE userID=?',
+                       (updated.name, updated.email, current_user_id))
             return self._fetch(db, current_user_id)

@@ -19,7 +19,7 @@ from uuid import uuid4
 from inventory_db import DEFAULT_DB, connect, transaction
 from inventory_service import InventoryError, InventoryService
 
-# Invented classroom demonstration numbers, not actual business stock or prices.
+# Fictional sample quantities and prices, not live business records.
 INGREDIENTS = [
     ("Sushi Rice", "g", 3500, 1200),
     ("Nori Sheets", "sheets", 30, 12),
@@ -224,12 +224,15 @@ def reset_database(svc: InventoryService, user_id: int, *, with_demo: bool = Tru
     if not db_path.is_file():
         raise InventoryError('There is no active database to reset.')
     users = []
+    demo_imports = []
     with closing(connect(db_path)) as db:
         actor = db.execute('SELECT role FROM "User" WHERE userID=? AND passwordHash IS NOT NULL',
                            (user_id,)).fetchone()
         if not actor or actor['role'] != 'Owner':
             raise InventoryError('Only an authenticated Owner can reset the database.')
         if preserve_accounts:
+            demo_imports = [dict(r) for r in db.execute(
+                'SELECT sourceUsername,userID FROM DemoUserImport')]
             users = [dict(r) for r in db.execute(
                 'SELECT u.userID,u.name,u.email,u.username,u.role,u.passwordHash,u.passwordSalt,u.accountActive, '
                 'e.hourlyRate,e.isActive,p.profileID,p.phoneNumber,p.dateOfBirth,p.version '
@@ -262,6 +265,9 @@ def reset_database(svc: InventoryService, user_id: int, *, with_demo: bool = Tru
                                    'VALUES(?,?,?,?,?,?)',
                                    (u['profileID'],u['userID'],u['name'] or '',u['phoneNumber'],
                                     u['dateOfBirth'],u['version']))
+                for imported in demo_imports:
+                    db.execute('INSERT INTO DemoUserImport(sourceUsername,userID) VALUES(?,?)',
+                               (imported['sourceUsername'], imported['userID']))
         if with_demo:
             if not preserve_accounts:
                 # Can't seed while no owner account exists; start empty instead.
