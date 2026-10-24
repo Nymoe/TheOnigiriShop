@@ -18,10 +18,6 @@ class BusinessData:
                             FROM "Order" WHERE status='Completed' AND orderDate IS NOT NULL
                             AND totalAmount IS NOT NULL
                             GROUP BY substr(orderDate, 1, 10) ORDER BY day''',
-            "Inventory": '''SELECT substr(transactionDate, 1, 10) AS day, COUNT(*) AS amount
-                            FROM InventoryTransaction WHERE transactionType='Customer Order'
-                            AND quantity < 0 AND transactionDate IS NOT NULL
-                            GROUP BY substr(transactionDate, 1, 10) ORDER BY day''',
         }
         if self.data_type not in queries:
             raise ValueError("Unknown trend type")
@@ -32,6 +28,48 @@ class BusinessData:
             db.close()
         history = []
         for row in records:
+            try:
+                day = date.fromisoformat(row['day'])
+            except (ValueError, TypeError):
+                continue
+            history.append({'date': day.isoformat(), 'value': float(row['amount'])})
+        return history
+
+
+class IngredientData:
+    '''Read actual ingredient consumption quantities from customer orders.'''
+
+    def __init__(self, ingredient_id, db_path=None):
+        self.ingredient_id = ingredient_id
+        self.db_path = db_path
+        self.data_type = 'Inventory'
+
+    @staticmethod
+    def list_ingredients(db_path=None):
+        db = connect(db_path)
+        try:
+            return db.execute('''SELECT ingredientID, ingredientName, quantityOnHand,
+                                        reorderLevel, unit FROM InventoryItem
+                                 ORDER BY ingredientName, ingredientID''').fetchall()
+        finally:
+            db.close()
+
+    def retrieve_data(self):
+        db = connect(self.db_path)
+        try:
+            rows = db.execute('''
+                SELECT substr(transactionDate, 1, 10) AS day,
+                       SUM(-quantity) AS amount
+                FROM InventoryTransaction
+                WHERE ingredientID = ? AND transactionType = 'Customer Order'
+                  AND quantity < 0 AND transactionDate IS NOT NULL
+                GROUP BY substr(transactionDate, 1, 10)
+                ORDER BY day
+            ''', (self.ingredient_id,)).fetchall()
+        finally:
+            db.close()
+        history = []
+        for row in rows:
             try:
                 day = date.fromisoformat(row['day'])
             except (ValueError, TypeError):
@@ -71,7 +109,7 @@ class TrendPrediction:
 class TrendPredictingDashboard:
     LABELS = {
         'Sales': 'completed orders',
-        'Inventory': 'ingredient consumption events',
+        'Inventory': 'units consumed',
         'Financial': 'CAD revenue (not profit)',
     }
 
@@ -98,11 +136,70 @@ class TrendPredictingDashboard:
                   f'{self.LABELS[prediction.trend_type]}')
             print('Method: average of the last 3 recorded dates; illustrative only.')
 
+    def run_inventory(self):
+        try:
+            ingredients = IngredientData.list_ingredients(self.db_path)
+        except Exception as exc:
+            print(f'Unable to load ingredients: {exc}')
+            return
+        if not ingredients:
+            print('No ingredients found in inventory.')
+            return
+        while True:
+            print('\n=== Ingredient Forecasting ===')
+            for index, item in enumerate(ingredients, 1):
+                print(f"{index}. {item['ingredientName']} ({item['unit'] or 'unit'})")
+            print('0. Return to trend dashboard')
+            choice = input('Select ingredient: ').strip()
+            if choice in ('0', 'q'):
+                return
+            if not choice.isdigit() or not 1 <= int(choice) <= len(ingredients):
+                print('Invalid selection.')
+                continue
+            item = ingredients[int(choice) - 1]
+            unit = item['unit'] or 'unit'
+            source = IngredientData(item['ingredientID'], self.db_path)
+            try:
+                history = source.retrieve_data()
+            except Exception as exc:
+                print(f'Unable to load consumption history: {exc}')
+                continue
+            print(f"\n=== {item['ingredientName']} Forecast ===")
+            stock = float(item['quantityOnHand'] or 0)
+            reorder = float(item['reorderLevel'] or 0)
+            print(f'Current stock: {stock:,.2f} {unit}')
+            print(f'Reorder level: {reorder:,.2f} {unit}')
+            if not history:
+                print('No recorded customer-order consumption for this ingredient.')
+                continue
+            print('Historical consumption:')
+            for entry in history:
+                print(f"  {entry['date']}: {entry['value']:,.2f} {unit}")
+            average = mean(entry['value'] for entry in history)
+            print(f'Average per recorded consumption day: {average:,.2f} {unit}')
+            if len(history) < TrendPrediction.MIN_OBSERVATIONS:
+                print('At least 3 recorded consumption dates are needed for forecasting.')
+                continue
+            prediction = TrendPrediction(source)
+            daily = prediction.generate_prediction(history)
+            print(f'Trend: {prediction.generate_trend(history)}')
+            print(f'Next recorded-day forecast: {daily:,.2f} {unit}')
+            print(f'7-day estimate (assuming daily use): {daily * 7:,.2f} {unit}')
+            if daily > 0:
+                print(f'Estimated stock coverage: {stock / daily:.1f} days (assuming daily use)')
+                if stock < daily * 7:
+                    print('Recommendation: stock may be insufficient for 7 days; consider replenishment.')
+                elif stock <= reorder:
+                    print('Recommendation: current stock is at or below reorder level.')
+                else:
+                    print('Stock appears sufficient for 7 days at the estimated rate.')
+            print('Note: estimates use the last 3 recorded consumption dates, not a calendar-day average.')
+
     def run(self):
         while True:
             print('\n=== Trend Predicting Dashboard ===')
             print('1. Sales (completed order count)')
-            print('2. Inventory (consumption transaction count)')
+            print('2. Inventory (forecast by ingredient)')
             print('3. Financial (completed-order revenue)')
             print('0. Return to main menu')
             selection = input('Choose an option: ').strip().lower()
@@ -113,6 +210,9 @@ class TrendPredictingDashboard:
                 print('Invalid selection.')
                 continue
             self.selected_type = options[selection]
+            if self.selected_type == 'Inventory':
+                self.run_inventory()
+                continue
             source = BusinessData(self.selected_type, self.db_path)
             try:
                 history = source.retrieve_data()
