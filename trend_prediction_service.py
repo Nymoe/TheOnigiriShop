@@ -136,6 +136,47 @@ class TrendPredictingDashboard:
                   f'{self.LABELS[prediction.trend_type]}')
             print('Method: average of the last 3 recorded dates; illustrative only.')
 
+    def display_graph(self, prediction, history, ingredient_name=None, unit=None):
+        """Plot historical values and a one-day forecast after user confirmation."""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+        except ImportError:
+            print('Graph unavailable. Install matplotlib: pip install matplotlib')
+            return
+        if prediction.predicted_value is None:
+            prediction.generate_prediction(history)
+        if prediction.predicted_value is None:
+            return
+        dates = [date.fromisoformat(entry['date']) for entry in history]
+        values = [entry['value'] for entry in history]
+        forecast_date = date.fromisoformat(prediction.prediction_date)
+        title = (f'{ingredient_name} Consumption Trend' if ingredient_name
+                 else f'{prediction.trend_type} Trend')
+        ylabel = (f'Quantity consumed ({unit})' if ingredient_name
+                  else 'Completed orders' if prediction.trend_type == 'Sales'
+                  else 'Revenue (CAD)')
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.plot(dates, values, marker='o', linewidth=2, label='Historical data')
+        ax.plot([dates[-1], forecast_date],
+                [values[-1], prediction.predicted_value],
+                linestyle='--', marker='o', linewidth=2, label='Forecast')
+        ax.scatter([forecast_date], [prediction.predicted_value], zorder=5)
+        ax.annotate(f'{prediction.predicted_value:,.2f}',
+                    (forecast_date, prediction.predicted_value),
+                    xytext=(7, 9), textcoords='offset points')
+        ax.set_title(title)
+        ax.set_xlabel('Date')
+        ax.set_ylabel(ylabel)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        fig.autofmt_xdate()
+        ax.grid(alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        print('Opening trend graph. Close the graph window to return to the menu.')
+        plt.show()
+        plt.close(fig)
+
     def run_inventory(self):
         try:
             ingredients = IngredientData.list_ingredients(self.db_path)
@@ -197,6 +238,7 @@ class TrendPredictingDashboard:
                 else:
                     print('Stock appears sufficient for 7 days at the estimated rate.')
             print('Note: estimates use the last 3 recorded consumption dates, not a calendar-day average.')
+            self.display_graph(prediction, history, item['ingredientName'], unit)
 
     def run(self):
         while True:
@@ -232,3 +274,4 @@ class TrendPredictingDashboard:
             prediction = TrendPrediction(source)
             self.display_trends(prediction, history)
             self.display_prediction(prediction, history)
+            self.display_graph(prediction, history)
