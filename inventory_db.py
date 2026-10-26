@@ -322,6 +322,68 @@ def initialize(db_path: str | Path | None = None) -> bool:
                 CREATE INDEX IF NOT EXISTS idx_payroll_entries_payroll
                     ON PayrollEntry(payrollID);
             ''')
+            # Both historical accounting layouts are supported: payroll used
+            # date/type; the separate ledger used transactionDate/transactionType.
+            # Retain either table and its transaction IDs, including Payroll FKs.
+            accounting_columns = {
+                row['name'] for row in db.execute('PRAGMA table_info("AccountingTransaction")')
+            }
+            if {'date', 'type'} <= accounting_columns:
+                accounting_date_column = 'date'
+            elif {'transactionDate', 'transactionType'} <= accounting_columns:
+                accounting_date_column = 'transactionDate'
+            else:
+                raise sqlite3.DatabaseError(
+                    'AccountingTransaction has an unsupported layout. Back up the database '
+                    'and review its columns before continuing.'
+                )
+            _ensure_column(db, 'AccountingTransaction', 'sourceType', 'TEXT')
+            _ensure_column(db, 'AccountingTransaction', 'sourceID', 'INTEGER')
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS AccountingDiscrepancy (
+                    discrepancyID INTEGER PRIMARY KEY,
+                    transactionID INTEGER,
+                    description TEXT NOT NULL,
+                    amount REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'Flagged'
+                        CHECK(status IN ('Flagged', 'Resolved')),
+                    createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    resolvedAt TEXT,
+                    FOREIGN KEY(transactionID) REFERENCES AccountingTransaction(transactionID)
+                        ON DELETE SET NULL
+                );
+                CREATE TABLE IF NOT EXISTS AccountingReconciliationLog (
+                    reconciliationID INTEGER PRIMARY KEY,
+                    reconciledAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    transactionCount INTEGER NOT NULL DEFAULT 0,
+                    flaggedCount INTEGER NOT NULL DEFAULT 0,
+                    result TEXT NOT NULL DEFAULT 'Completed'
+                );
+                CREATE INDEX IF NOT EXISTS idx_accounting_transaction_reference
+                    ON AccountingTransaction(reference);
+                CREATE INDEX IF NOT EXISTS idx_accounting_discrepancy_status
+                    ON AccountingDiscrepancy(status, discrepancyID);
+            ''')
+            db.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_accounting_transaction_date '
+                f'ON AccountingTransaction("{accounting_date_column}", transactionID)'
+            )
+            # Connect already-paid payroll transactions to their original run.
+            # Existing IDs, amounts, and invoice/reference fields stay unchanged.
+            db.execute('''
+                UPDATE AccountingTransaction
+                   SET sourceType='Payroll',
+                       sourceID=(SELECT p.payrollID FROM Payroll p
+                                  WHERE p.accountingTransactionID=AccountingTransaction.transactionID)
+                 WHERE sourceType IS NULL AND transactionID IN
+                       (SELECT accountingTransactionID FROM Payroll
+                         WHERE accountingTransactionID IS NOT NULL)
+            ''')
+            db.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_source_once
+                    ON AccountingTransaction(sourceType, sourceID)
+                    WHERE sourceType IS NOT NULL AND sourceID IS NOT NULL
+            ''')
     finally:
         db.close()
     return fresh

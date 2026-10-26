@@ -8,8 +8,7 @@ Run these actions only when no other app is using the SQLite file.
 from __future__ import annotations
 
 from contextlib import closing
-from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import os
 from pathlib import Path
 import sqlite3
@@ -18,6 +17,8 @@ from uuid import uuid4
 
 from inventory_db import DEFAULT_DB, connect, transaction
 from inventory_service import InventoryError, InventoryService
+from accounting_service import post_source_transaction
+from payroll import Employee, Payroll, PayrollEntry
 
 # Fictional sample quantities and prices, not live business records.
 INGREDIENTS = [
@@ -120,6 +121,12 @@ def populate_demo_data(svc: InventoryService, user_id: int) -> dict[str, int]:
                                       customer_order_id=order_id,
                                       notes='Completed demo customer order')
                 db.execute('UPDATE "Order" SET status="Completed" WHERE orderID=?', (order_id,))
+                post_source_transaction(
+                    db, kind='Sale', when=datetime.now().date().isoformat(),
+                    description=f'Completed customer order #{order_id}',
+                    reference=f'ORDER-{order_id}', amount=total,
+                    source_type='Order', source_id=order_id,
+                )
             return order_id
 
         for items in COMPLETED_ORDERS:
@@ -145,6 +152,221 @@ def populate_demo_data(svc: InventoryService, user_id: int) -> dict[str, int]:
         return {'ingredients': len(ingredient_ids), 'suppliers': len(supplier_ids),
                 'recipes': len(recipe_ids), 'customer_orders': len(COMPLETED_ORDERS) + 1,
                 'completed_orders': len(COMPLETED_ORDERS), 'purchase_orders': 1}
+
+
+def _require_demo_owner(db: sqlite3.Connection, user_id: int) -> int:
+    """Check current Owner permissions before inserting optional sample activity."""
+    row = db.execute('''SELECT o.ownerID FROM "User" u JOIN Owner o ON o.userID=u.userID
+                        WHERE u.userID=? AND u.role='Owner' AND u.accountActive=1
+                        AND u.passwordHash IS NOT NULL''', (user_id,)).fetchone()
+    if row is None:
+        raise InventoryError('Only an active Owner can load sample activity.')
+    return int(row['ownerID'])
+
+
+def _check_demo_run(db: sqlite3.Connection, key: str) -> None:
+    """Keep each optional dataset all-or-nothing and prevent repeated imports."""
+    db.execute('''CREATE TABLE IF NOT EXISTS DemoDataSet (
+                      dataset TEXT PRIMARY KEY,
+                      loadedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  )''')
+    if db.execute('SELECT 1 FROM DemoDataSet WHERE dataset=?', (key,)).fetchone():
+        raise InventoryError('This sample dataset was already loaded. No records were added. '
+                             'Use other menus to inspect it, or back up and reset if you need to reload.')
+
+
+def _finish_demo_run(db: sqlite3.Connection, key: str) -> None:
+    db.execute('INSERT INTO DemoDataSet(dataset) VALUES (?)', (key,))
+
+
+def populate_trend_history(svc: InventoryService, user_id: int) -> dict[str, int]:
+    """Add 12 days of real stock deductions and source-linked Sales to sample recipes.
+
+    Inventory and financial postings share one SQLite transaction. If stock must
+    be replenished, a sample received purchase order and invoice are also recorded.
+    """
+    daily_order_counts = (2, 2, 3, 2, 3, 3, 4, 3, 4, 4, 5, 6)
+    with transaction(svc.db_path) as db:
+        _require_demo_owner(db, user_id)
+        _check_demo_run(db, 'trend_12day_v1')
+        starter_supplier = db.execute('SELECT supplierID FROM Supplier WHERE name=?',
+                                      ('North Shore Rice & Dry Goods (Demo)',)).fetchone()
+        if starter_supplier is None:
+            raise InventoryError('The starter shop dataset is required for order history. '
+                                 'Load 16 -> 1 -> 1 first (or reset after backing up if stock already exists).')
+
+        recipe_ids = []
+        recipes = {}
+        for name, _price, _components in RECIPES:
+            recipe = db.execute('SELECT recipeID, price FROM Recipe WHERE name=?', (name,)).fetchone()
+            if recipe is None or recipe['price'] is None or recipe['price'] <= 0:
+                raise InventoryError(f'Sample recipe {name!r} is missing or has no positive price. '
+                                     'Check recipes in option 7 before loading order history.')
+            ingredients = list(db.execute('''SELECT ingredientID,quantityRequired
+                                              FROM RecipeIngredient WHERE recipeID=?''',
+                                          (recipe['recipeID'],)))
+            if not ingredients:
+                raise InventoryError(f'Sample recipe {name!r} has no ingredients. '
+                                     'Finish its ingredient setup under option 6.')
+            recipe_ids.append(recipe['recipeID'])
+            recipes[recipe['recipeID']] = (float(recipe['price']), ingredients)
+
+        schedule = []
+        needed = {}
+        for day_idx, count in enumerate(daily_order_counts):
+            day = (date.today() - timedelta(days=len(daily_order_counts) - day_idx)).isoformat()
+            for order_idx in range(count):
+                rid = recipe_ids[(day_idx * 2 + order_idx) % len(recipe_ids)]
+                servings = 1 + ((day_idx + order_idx) % 3)
+                schedule.append((day, rid, servings))
+                for item in recipes[rid][1]:
+                    iid = item['ingredientID']
+                    needed[iid] = needed.get(iid, 0) + item['quantityRequired'] * servings
+
+        restock = {}
+        for iid, qty in needed.items():
+            item = db.execute('''SELECT quantityOnHand,reorderLevel
+                                 FROM InventoryItem WHERE ingredientID=?''', (iid,)).fetchone()
+            if item is None:
+                raise InventoryError(f'Recipe ingredient #{iid} no longer exists.')
+            safety = max(float(item['reorderLevel'] or 0), qty * 0.10)
+            shortfall = qty + safety - float(item['quantityOnHand'] or 0)
+            if shortfall > 0.000001:
+                restock[iid] = round(shortfall + 1, 2)
+
+        purchases = 0
+        if restock:
+            restock_day = (date.today() - timedelta(days=13)).isoformat()
+            db.execute('''INSERT OR IGNORE INTO Supplier(name,contactInfo) VALUES (?,?)''',
+                       ('Onigiri Wholesale Supplier (Demo)', 'wholesale@example.test'))
+            supplier_id = db.execute('SELECT supplierID FROM Supplier WHERE name=?',
+                                     ('Onigiri Wholesale Supplier (Demo)',)).fetchone()['supplierID']
+            po_id = db.execute('''INSERT INTO InventoryOrder(orderDate,status,notes)
+                                  VALUES (?,?,?)''',
+                               (restock_day, 'Received', 'Sample stock for historical order activity')).lastrowid
+            movements = []
+            for iid, qty in restock.items():
+                db.execute('''INSERT INTO InventoryOrderLine
+                    (quantityOrdered,receivedQuantity,inventoryOrderID,ingredientID)
+                    VALUES (?,?,?,?)''', (qty, qty, po_id, iid))
+                svc._apply_change(db, iid, qty, user_id, 'Supplier Delivery',
+                                  supplier_id=supplier_id, inventory_order_id=po_id,
+                                  notes='Sample restock for order history',
+                                  transaction_date=restock_day + 'T09:00:00', recorded_ids=movements)
+            # Approximate wholesale amount: this is an explicitly fictional invoice.
+            invoice_amount = round(sum(qty * 0.04 for qty in restock.values()), 2)
+            post_source_transaction(db, kind='Purchase', when=restock_day,
+                                    description=f'Sample stock delivery for PO #{po_id}',
+                                    reference=f'DEMO-PO-{po_id}', amount=invoice_amount,
+                                    source_type='Delivery', source_id=movements[0])
+            purchases = 1
+
+        for day, rid, servings in schedule:
+            price, ingredients = recipes[rid]
+            total = round(price * servings, 2)
+            order_id = db.execute('''INSERT INTO "Order"
+                  (orderDate,totalAmount,status,createdByUserID) VALUES (?,?,?,?)''',
+                                  (day + 'T12:00:00', total, 'Pending', user_id)).lastrowid
+            db.execute('INSERT INTO OrderRecipe(orderID,recipeID,quantity) VALUES (?,?,?)',
+                       (order_id, rid, servings))
+            for ingredient in ingredients:
+                svc._apply_change(db, ingredient['ingredientID'],
+                                  -(ingredient['quantityRequired'] * servings),
+                                  user_id, 'Customer Order', customer_order_id=order_id,
+                                  notes='Completed sample historical order',
+                                  transaction_date=day + 'T12:30:00')
+            db.execute('UPDATE "Order" SET status=? WHERE orderID=?', ('Completed', order_id))
+            post_source_transaction(db, kind='Sale', when=day,
+                                    description=f'Completed customer order #{order_id}',
+                                    reference=f'ORDER-{order_id}', amount=total,
+                                    source_type='Order', source_id=order_id)
+        _finish_demo_run(db, 'trend_12day_v1')
+        return {'days': len(daily_order_counts), 'completed_orders': len(schedule),
+                'sales_posted': len(schedule), 'restock_deliveries': purchases}
+
+
+def populate_accounting_activity(svc: InventoryService, user_id: int) -> dict[str, int]:
+    """Add dated manual bookkeeping examples, including a reconciliation practice case."""
+    examples = (
+        (11, 'Sale', 'Sample off-menu catering income', 'DEMO-CATERING-1', 145.00),
+        (10, 'Purchase', 'Sample equipment purchase', 'DEMO-EQUIP-1', 325.00),
+        (9, 'Expense', 'Sample location rent', 'DEMO-RENT-1', 950.00),
+        (8, 'Expense', 'Sample electricity expense', 'DEMO-UTIL-1', 75.20),
+        (6, 'Purchase', 'Sample food packaging supplies', 'DEMO-PACK-1', 65.70),
+        (5, 'Expense', 'Sample website hosting', 'DEMO-HOST-1', 29.99),
+        (4, 'Inventory Adjustment', 'Sample inventory write-off', 'DEMO-WRITEOFF-1', 18.50),
+        (3, 'Expense', 'Sample marketing expense', 'DEMO-MARKETING-1', 42.00),
+        (2, 'Expense', 'Sample duplicate invoice for reconciliation A', 'DEMO-DUPLICATE-1', 22.50),
+        (1, 'Expense', 'Sample duplicate invoice for reconciliation B', 'DEMO-DUPLICATE-1', 22.50),
+    )
+    with transaction(svc.db_path) as db:
+        _require_demo_owner(db, user_id)
+        _check_demo_run(db, 'accounting_examples_v1')
+        columns = {col['name'] for col in db.execute('PRAGMA table_info("AccountingTransaction")')}
+        if {'date', 'type'} <= columns:
+            date_col, type_col = 'date', 'type'
+        elif {'transactionDate', 'transactionType'} <= columns:
+            date_col, type_col = 'transactionDate', 'transactionType'
+        else:
+            raise InventoryError('Accounting is not initialized. Restart the application '
+                                 'or check database compatibility in the README.')
+        for age, kind, description, reference, amount in examples:
+            when = (date.today() - timedelta(days=age)).isoformat()
+            db.execute(f'''INSERT INTO AccountingTransaction
+                (ledgerID,"{date_col}","{type_col}",description,reference,amount)
+                VALUES (1,?,?,?,?,?)''', (when, kind, description, reference, amount))
+        _finish_demo_run(db, 'accounting_examples_v1')
+        return {'manual_transactions': len(examples), 'repeated_references': 1}
+
+
+def populate_payroll_activity(svc: InventoryService, user_id: int) -> dict[str, int]:
+    """Build one fictional paid payroll using real pay and accounting calculations."""
+    with transaction(svc.db_path) as db:
+        owner_id = _require_demo_owner(db, user_id)
+        _check_demo_run(db, 'payroll_examples_v1')
+        active = db.execute('''SELECT e.employeeID,e.hourlyRate,u.name FROM Employee e
+            JOIN "User" u ON u.userID=e.userID
+            WHERE u.role='Employee' AND u.accountActive=1 AND COALESCE(e.isActive,1)=1
+              AND COALESCE(e.hourlyRate,0)>0 ORDER BY e.employeeID LIMIT 3''').fetchall()
+        if not active:
+            raise InventoryError('A sample payroll needs at least one active Employee with an '
+                                 'hourly rate. Create/enable an Employee under 15, then set '
+                                 'their rate under 20 -> 7 before retrying.')
+        pay_day = None
+        for ago in range(3, 90):
+            candidate = (date.today() - timedelta(days=ago)).isoformat()
+            if not db.execute('SELECT 1 FROM Payroll WHERE payDate=?', (candidate,)).fetchone():
+                pay_day = candidate
+                break
+        if pay_day is None:
+            raise InventoryError('Every candidate sample payroll date is already used. '
+                                 'Review the Payroll menu before adding another pay period.')
+        payroll_id = db.execute('''INSERT INTO Payroll(payDate,status,totalAmount)
+                                   VALUES (?,?,0)''', (pay_day, 'Draft')).lastrowid
+        employees = {r['employeeID']: Employee(r['employeeID'], r['hourlyRate'], r['name'])
+                     for r in active}
+        run = Payroll(payroll_id, pay_day)
+        for index, emp in enumerate(active):
+            hours = 72 - index * 4
+            overtime = 4 if index == 0 else 0
+            run.entries.append(PayrollEntry(None, emp['employeeID'], hours, overtime))
+        run.calculatePay(employees)
+        run.approve(owner_id)
+        expense = run.recordExpense(pay_day)
+        for item in run.entries:
+            db.execute('''INSERT INTO PayrollEntry
+                (payrollID,employeeID,hoursWorked,overtimeHours,deductions,netPay)
+                VALUES (?,?,?,?,?,?)''', (payroll_id, item.employeeID, item.hoursWorked,
+                                         item.overtimeHours, item.deductions, item.netPay))
+        tx_id = post_source_transaction(db, kind=expense.type, when=expense.date,
+                                        description=expense.description, reference=expense.reference,
+                                        amount=expense.amount, source_type='Payroll', source_id=payroll_id)
+        db.execute('''UPDATE Payroll SET status=?,totalAmount=?,approvedByOwnerID=?,
+                      accountingTransactionID=? WHERE payrollID=?''',
+                   (run.status, run.totalAmount, owner_id, tx_id, payroll_id))
+        _finish_demo_run(db, 'payroll_examples_v1')
+        return {'payroll_id': payroll_id, 'employees': len(run.entries),
+                'accounting_expenses': 1}
 
 
 def _path(svc: InventoryService) -> Path:

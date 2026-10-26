@@ -167,14 +167,14 @@ class ProfileService:
         )
 
     def view_profile(self, current_user_id: int) -> Profile:
-        """Included use case 5a: view an existing profile (no write)."""
+        """Return the signed-in user's profile without changing stored data."""
         current_user_id = _valid_user_id(current_user_id)
         with closing(connect(self.db_path)) as db:
             return self._fetch(db, current_user_id)
 
     def update_profile(self, current_user_id: int, changes: Mapping[str, object],
                        *, expected_version: int | None = None) -> Profile:
-        """Optional use case 5b: validate, commit both Profile and shared User.
+        """Validate and update profile data and shared User details together.
 
         When expected_version is supplied (as it is by the CLI), stale forms
         cannot silently overwrite someone else's newer changes. SQLite's

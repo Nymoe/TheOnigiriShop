@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from hashlib import pbkdf2_hmac
 from pathlib import Path
@@ -18,6 +19,7 @@ from uuid import uuid4
 
 from inventory_db import connect, initialize, transaction
 from inventory_service import InventoryService, _ident, _validate_email
+from accounting_service import post_source_transaction
 from profile_service import _validate_dob, _validate_name, _validate_phone
 from loyalty_models import LoyaltyAccount, LoyaltyTransaction, Reward, Redemption
 
@@ -137,8 +139,7 @@ LEGACY_SAMPLE_REWARD_COSTS = {
 class LoyaltyService:
     """Registration, verification, reward catalogue, point balance and audited ledger.
 
-    `points_per_dollar` is a temporary configurable business assumption, not a
-    loyalty rule stated in the use case. The CLI installs a few sample discount
+    `points_per_dollar` is a configurable business rule. The CLI installs sample discount
     rewards on first entry to loyalty; Owners can add/deactivate other rewards.
     Eventually the POS will supply eligibility and apply actual discounts.
     """
@@ -150,7 +151,7 @@ class LoyaltyService:
         self.points_per_dollar = points_per_dollar
         initialize(db_path)
 
-    # S-1 Customer Registration; reuses User, Customer and Profile.
+    # Customer registration reuses User, Customer and Profile.
     def register_customer(self, employee_id: int, name: str, *, email: str | None = None,
                           phone_number: str | None = None, username: str | None = None,
                           password: str | None = None,
@@ -209,7 +210,7 @@ class LoyaltyService:
             return {**dict(_account(db, customer_id)), 'initialPassword': initial_password}
 
     def enroll_existing_customer(self, customer_user_id: int, actor_id: int) -> dict:
-        """S-1 for existing Profile Management customer (employee/owner or self)."""
+        """Enroll an existing customer (by authorized staff or the customer)."""
         with transaction(self.db_path) as db:
             target = db.execute('''SELECT c.customerID,u.accountActive,u.role
                                    FROM "User" u LEFT JOIN Customer c ON c.userID=u.userID
@@ -285,7 +286,7 @@ class LoyaltyService:
             return dict(_account(db, customer_id))
 
     def account_model(self, customer_id: int) -> LoyaltyAccount:
-        """Retrieve UML LoyaltyAccount, including both currentPoints/pointsBalance names."""
+        """Retrieve the loyalty account model with compatible balance fields."""
         with closing(connect(self.db_path)) as db:
             return _account_model(_account(db, customer_id))
 
@@ -303,7 +304,7 @@ class LoyaltyService:
                        (status, acc['loyaltyAccountID']))
 
     def view_loyalty_details(self, customer_id: int) -> dict:
-        """S-3: current balance, order history, and available rewards."""
+        """Return current balance, order history, and available rewards."""
         return {'account': self.retrieve_customer_account(customer_id),
                 'transactions': self.transaction_history(customer_id),
                 'rewards': self.display_available_rewards(customer_id)}
@@ -321,7 +322,7 @@ class LoyaltyService:
                    (account['loyaltyAccountID'],))]
 
     def transaction_model(self, loyalty_transaction_id: int) -> LoyaltyTransaction:
-        """Retrieve the UML LoyaltyTransaction for a posted purchase.
+        """Retrieve the loyalty transaction for a posted purchase.
 
         Service callers are responsible for authenticating access to records;
         the interactive CLI already restricts customer history to self.
@@ -401,7 +402,7 @@ class LoyaltyService:
                              (int(active_only),))]
 
     def reward_model(self, reward_id: int) -> Reward:
-        """Retrieve UML Reward with isAvailable()/isEligible(balance)."""
+        """Retrieve a Reward with availability and eligibility methods."""
         with closing(connect(self.db_path)) as db:
             row = db.execute('''SELECT rewardID,name,pointsCost,isActive,discountAmount,publicUUID
                                 FROM Reward WHERE rewardID=?''',
@@ -540,12 +541,22 @@ class LoyaltyService:
                                     discountAmount=quote.discount_amount)
             redemption.confirmRedemption()
             redemption.record(db)
+        # This also updates an existing gross sale if loyalty was recorded after
+        # order completion. It never creates a second sale for the same Order ID.
+        order_date = db.execute('SELECT orderDate FROM "Order" WHERE orderID=?',
+                                (order_id,)).fetchone()['orderDate']
+        sale_id = post_source_transaction(
+            db, kind='Sale', when=order_date or date.today().isoformat(),
+            description=f'Completed customer order #{order_id}',
+            reference=f'ORDER-{order_id}', amount=quote.final_amount,
+            source_type='Order', source_id=order_id, update_existing=True,
+        )
         return {'loyaltyTransactionID': tx_id, 'customerID': customer_id,
                 'orderID': order_id, 'pointsEarned': quote.points_earned,
                 'pointsRedeemed': quote.points_redeemed, 'balanceAfter': quote.new_balance,
                 'discountAmount': float(quote.discount_amount),
                 'finalAmount': float(quote.final_amount), 'eligibleAmount': float(quote.eligible_amount),
-                'rewardID': quote.reward_id}
+                'rewardID': quote.reward_id, 'accounting_transaction_id': sale_id}
 
     def complete_order_with_loyalty(self, employee_id: int, customer_id: int, order_id: int,
                                     *, reward_id: int | None = None) -> dict:
