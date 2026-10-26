@@ -1,6 +1,6 @@
 # The Onigiri Shop — Management System
 
-This Python application is a menu-driven management system for an Onigiri shop. It manages ingredients, recipes, orders, inventory deductions, low-stock alerts, suppliers and purchasing, customer/employee accounts, self-service profiles, loyalty points and rewards, employee payroll, a shared Accounting Ledger, and sales/inventory/revenue trend predictions, plus customer feedback submission and staff review. Owners can optionally load separate test datasets for inventory, accounting, trends and payroll.
+This Python application is a menu-driven management system for The Onigiri Shop. It manages ingredients, recipes, orders, inventory deductions, low-stock alerts, suppliers and purchasing, customer/employee accounts, self-service profiles, loyalty points and rewards, employee payroll, a shared Accounting Ledger, and sales/inventory/revenue trend predictions, plus customer feedback submission and staff review. Owners can optionally load separate test datasets for inventory, accounting, trends and payroll.
 
 **The database is persistent.** Data is stored in a local SQLite file named `btm495.db` (the existing filename is retained so older installations keep working). The application creates that file **only if it does not already exist**. On subsequent launches, it reads and updates the same file; it does not wipe the database on startup. You do **not** need to run the original `database.py` or `main.py` to use this application.
 
