@@ -172,18 +172,18 @@ class FinancialIntegrationTests(unittest.TestCase):
                 accounting_menu({'role': 'Owner'}, self.path)
         self.assertIn('No accounting transactions', result.getvalue())
 
-    def test_main_menu_routes_21_without_changing_existing_module_numbers(self):
+    def test_main_menu_routes_accounting_after_renumbering(self):
         owner = self.inv.login('owner', 'owner-password')
-        with patch('inventory_cli.prompt', side_effect=['21', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['18', '23']), \
              patch('inventory_cli.accounting_menu') as accounting, \
              patch('builtins.input', return_value=''), redirect_stdout(StringIO()) as out:
             menu(self.inv, owner)
         accounting.assert_called_once_with(owner, self.path)
         displayed = out.getvalue()
-        self.assertIn('11. Create inventory purchase order', displayed)
-        self.assertIn('12. View inventory purchase orders', displayed)
-        self.assertIn('20. Payroll (Owner)', displayed)
-        self.assertIn('21. Accounting Ledger (Owner)', displayed)
+        self.assertIn('12. Create inventory purchase order', displayed)
+        self.assertIn('13. View inventory purchase orders', displayed)
+        self.assertIn('17. Payroll (Owner)', displayed)
+        self.assertIn('18. Accounting Ledger (Owner)', displayed)
 
 
 class NewAccountingSchemaTests(unittest.TestCase):

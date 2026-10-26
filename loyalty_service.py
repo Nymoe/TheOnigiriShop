@@ -116,7 +116,7 @@ def _reward_model(row: sqlite3.Row) -> Reward:
 
 # Optional, demonstration-only discount catalogue (CAD). The points and dollar
 # values are configurable sample rules.
-# Loading is deferred until a user opens the Loyalty Program (option 19).
+# Loading is deferred until a user opens the Loyalty Program (option 5).
 # This gives a 5% nominal return: 10 points / $1, $5 for 1,000 points.
 SAMPLE_REWARDS = (
     ('$5 Discount', 1000, '5.00'),
@@ -217,9 +217,9 @@ class LoyaltyService:
                                    WHERE u.userID=?''',
                                 (_ident(customer_user_id, 'User ID'),)).fetchone()
             if not target or target['role'] != 'Customer' or target['customerID'] is None:
-                raise AccountNotFoundError('No Customer user with that User ID. Use 19 → 9 to find User IDs.')
+                raise AccountNotFoundError('No Customer user with that User ID. Use 5 → 9 to find User IDs.')
             if not target['accountActive']:
-                raise LoyaltyError('This Customer login is disabled. Ask an Owner to enable it under 15 → 6 first.')
+                raise LoyaltyError('This Customer login is disabled. Ask an Owner to enable it under 20 → 6 first.')
             if actor_id != customer_user_id:
                 _active_employee(db, actor_id)
             else:
@@ -269,7 +269,7 @@ class LoyaltyService:
                               WHERE c.customerID=? AND u.role='Customer' ''',
                              (_ident(customer_id, 'Customer ID'),)).fetchone()
             if not row:
-                raise AccountNotFoundError('Customer ID not found. See option 19 → 9 for the customer list.')
+                raise AccountNotFoundError('Customer ID not found. See option 5 → 9 for the customer list.')
             return dict(row)
 
     def customer_id_for_user(self, customer_user_id: int) -> int:

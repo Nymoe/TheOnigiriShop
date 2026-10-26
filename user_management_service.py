@@ -143,8 +143,14 @@ class UserManagementService:
                                      'disable access if needed to preserve loyalty history.')
             if current['role'] == 'Owner':
                 _protect_owner(db, actor_id, target_id)
-            # Deleting former subtype is safe only when no other team table
-            # references it; FK errors abort the entire role change.
+            # A customer with submitted feedback must keep its Customer identity
+            # so feedback history remains attributable after account changes.
+            if current['role'] == 'Customer' and db.execute("""
+                    SELECT 1 FROM Feedback f JOIN Customer c ON c.customerID=f.customerID
+                    WHERE c.userID=? LIMIT 1""", (target_id,)).fetchone():
+                raise InventoryError('Customer has saved feedback. To preserve their feedback '
+                                     'history, disable the account instead of changing its role.')
+            # Keep role subtype records consistent; foreign keys protect history.
             subtype = current['role']
             if subtype in ROLES:
                 db.execute(f'DELETE FROM "{subtype}" WHERE userID=?', (target_id,))

@@ -166,7 +166,7 @@ class ProfileUseCaseTests(unittest.TestCase):
     def test_customer_menu_rejects_inventory_admin_options(self):
         from inventory_cli import menu
         user = self.inventory.login('customer', 'password-customer')
-        with patch('inventory_cli.prompt', side_effect=['2', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['8', '23']), \
              patch('inventory_cli.create_ingredient') as make_ingredient:
             menu(self.inventory, user)
         make_ingredient.assert_not_called()

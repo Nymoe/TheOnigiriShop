@@ -1,4 +1,4 @@
-"""Sample reward catalogue: appears in option 19 but does not preload user accounts."""
+"""Sample reward catalogue: appears in option 5 but does not preload user accounts."""
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path

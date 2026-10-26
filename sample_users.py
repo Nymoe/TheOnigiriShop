@@ -1,4 +1,4 @@
-"""Explicit Owner-only import of fictional sample users (main menu option 16).
+"""Explicit Owner-only import of fictional sample users (main menu option 21).
 
 Contains optional fictional users and profile data. Nothing here
 runs at database initialization, launch, or ordinary account registration.
@@ -6,7 +6,7 @@ Sample accounts share the current User/Profile/role tables; never overwrite a
 real existing user or replace the live SQLite database.
 
 This loader intentionally imports users and profiles only. Loyalty memberships
-can be created from menu option 19, once customers choose to enroll.
+can be created from menu option 5, once customers choose to enroll.
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def load_sample_users(svc: InventoryService, actor_id: int) -> dict[str, int]:
             (_ident(actor_id, "Actor ID"),),
         ).fetchone()
         if not actor or actor["role"] != "Owner" or actor["accountActive"] != 1 or not actor["passwordHash"]:
-            raise InventoryError("Only an active Owner can import sample users via option 16.")
+            raise InventoryError("Only an active Owner can import sample users via option 21.")
 
         # Keep a stable link to each inserted sample account, because profile
         # details, user names, roles and email addresses can be edited later.

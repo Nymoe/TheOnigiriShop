@@ -85,7 +85,7 @@ class IntegratedSystemTests(unittest.TestCase):
 
     def test_staff_main_menu_routes_loyalty_and_payroll_independently(self):
         owner = self.inventory.login('owner', 'owner-password')
-        with patch('inventory_cli.prompt', side_effect=['19', '20', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['5', '17', '23']), \
              patch('inventory_cli.loyalty_staff_menu') as loyalty_menu, \
              patch('inventory_cli.payroll_menu') as payroll_menu, \
              patch('builtins.input', return_value=''):
@@ -95,7 +95,7 @@ class IntegratedSystemTests(unittest.TestCase):
 
     def test_customer_menu_has_loyalty_but_no_payroll(self):
         customer = self.inventory.login('customer', 'customer-password')
-        with patch('inventory_cli.prompt', side_effect=['20', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['17', '23']), \
              patch('inventory_cli.payroll_menu') as payroll_menu:
             menu(self.inventory, customer)
         payroll_menu.assert_not_called()

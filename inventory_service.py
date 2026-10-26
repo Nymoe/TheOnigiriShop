@@ -84,7 +84,7 @@ def _today() -> str:
 
 
 def _date_today() -> str:
-    """Use a simple ISO date for fields shared with other team modules."""
+    """Use a consistent ISO date for records shared across services."""
     return date.today().isoformat()
 
 
@@ -219,7 +219,7 @@ class InventoryService:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (ingredient_id, user_id, supplier_id, customer_order_id,
               inventory_order_id, action, delta, timestamp, notes)).lastrowid
-        # Mirror stock movements to the broad system's existing InventoryAdjustment.
+        # Keep stock movements in sync with the existing InventoryAdjustment table.
         db.execute('''
             INSERT INTO InventoryAdjustment(quantityChange, reason, adjustmentDate, ingredientID)
             VALUES (?, ?, ?, ?)
@@ -439,7 +439,7 @@ class InventoryService:
             raise InventoryError('Customer ID was not found. Use Loyalty option 9 to find customer IDs, '
                                  'or option 1 to register a walk-in.')
         if not row['accountActive']:
-            raise InventoryError('That Customer account is disabled. Ask an Owner to enable it under option 15.')
+            raise InventoryError('That Customer account is disabled. Ask an Owner to enable it under option 20.')
 
     def set_order_customer(self, order_id: int, customer_id: int) -> None:
         """Associate a customer with a pending order before it is completed."""

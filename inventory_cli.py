@@ -11,6 +11,7 @@ from demo_tools import (backup_database, list_backups, reset_database, restore_d
                         populate_payroll_activity)
 from sample_users import load_sample_users
 from profile_service import ProfileError, ProfileNotFoundError, ProfileService
+from feedback_service import FeedbackError, FeedbackStorageError, FeedbackService, Feedback
 from user_management_service import UserManagementService
 from loyalty_service import LoyaltyError, LoyaltyService, AccountNotFoundError
 from payroll import DEDUCTION_RATE, OVERTIME_MULTIPLIER, Payroll, PayrollError
@@ -285,7 +286,7 @@ def order_create(svc: InventoryService, user: dict) -> None:
     if not items:
         print("  Order cancelled.")
         return
-    print('  Customer IDs can be found under 19 → 9 (List customer users).')
+    print('  Customer IDs can be found under 5 → 9 (List customer users).')
     print('  Leave Customer ID blank for an unlinked order; it can be assigned while Pending.')
     customer_id = ask_id('Customer ID for loyalty (optional)', optional=True)
     if confirm("Save customer order as Pending?", True):
@@ -320,17 +321,17 @@ def complete_order_flow(svc: InventoryService, user: dict, order_id: int) -> Non
         loyalty = LoyaltyService(svc.db_path)
         status = loyalty.customer_status(customer_id)
         if not status['accountActive']:
-            print('  This Customer login is disabled. An Owner can enable it under 15 → 6.')
+            print('  This Customer login is disabled. An Owner can enable it under 20 → 6.')
             loyalty = None
         elif status['loyaltyAccountID'] is None:
-            print(f"  {status['name']} has not enrolled in loyalty yet (19 → 2).")
+            print(f"  {status['name']} has not enrolled in loyalty yet (5 → 2).")
             if confirm('Enroll this customer now so the order earns points?'):
                 loyalty.enroll_existing_customer(status['userID'], user['userID'])
             else:
                 print('  The order can be completed without points. Enroll before completing to earn automatically.')
                 loyalty = None
         elif status['loyaltyStatus'] != 'Active':
-            print('  Loyalty is suspended. An Owner must reactivate it using 19 → 8 to earn or redeem points.')
+            print('  Loyalty is suspended. An Owner must reactivate it using 5 → 8 to earn or redeem points.')
             loyalty = None
 
     if loyalty is not None:
@@ -482,7 +483,7 @@ def demo_data_menu(svc: InventoryService, user: dict) -> None:
    3. Accounting examples: 10 manual entries and a duplicate-reference example
       (works with or without starter shop data)
    4. Paid payroll example: employee hours, pay stubs and ledger Expense
-      (requires an active Employee with an hourly rate under 20 -> 7)
+      (requires an active Employee with an hourly rate under 17 -> 7)
    0. Back to Demo / Database Management (blank also returns)
 ''')
         choice = prompt('Select sample dataset')
@@ -498,7 +499,7 @@ def demo_data_menu(svc: InventoryService, user: dict) -> None:
                  'posts their actual Sales. Restocks and records a sample supplier '
                  'invoice if needed. Existing real orders stay untouched.',
             '3': 'Adds 10 fictional accounting records, including a repeated invoice '
-                 'reference for option 21 -> 5 reconciliation testing.',
+                 'reference for option 18 -> 5 reconciliation testing.',
             '4': 'Creates an example payroll for up to 3 active rated Employees, marks '
                  'it Paid and posts its expense. No real payments are sent.',
         }
@@ -522,11 +523,11 @@ def demo_data_menu(svc: InventoryService, user: dict) -> None:
                 print('  Includes low stock, completed/pending orders and a partial delivery.')
                 inventory_view(svc)
             elif choice == '2':
-                print('  Review the new results under option 22 for trends and 21 for Sales/Purchases.')
+                print('  Review the new results under option 19 for trends and 18 for Sales/Purchases.')
             elif choice == '3':
-                print('  Use 21 -> 2 to view these entries and 21 -> 5 to find the sample duplicate.')
+                print('  Use 18 -> 2 to view these entries and 18 -> 5 to find the sample duplicate.')
             elif choice == '4':
-                print('  Use 20 to view the paid payroll and 21 to see its linked expense.')
+                print('  Use 17 to view the paid payroll and 18 to see its linked expense.')
         except (InventoryError, sqlite3.Error, PayrollError, AccountingError) as exc:
             print(f'  Sample data was not loaded: {exc}')
             print('  No partial records from that dataset were saved.')
@@ -1090,7 +1091,7 @@ def accounting_menu(user: dict, db_path=None) -> None:
    0. Return to main menu
 
    Completed orders and paid payrolls post automatically. Supplier deliveries
-   post Purchases when an invoice amount is supplied (main menu option 5).
+   post Purchases when an invoice amount is supplied (main menu option 14).
 
    Required for a new transaction:
      - Type: [1] Sale, [2] Purchase, [3] Expense, [4] Inventory Adjustment
@@ -1202,7 +1203,7 @@ def loyalty_staff_menu(svc: LoyaltyService, user: dict) -> None:
                     print(f"  Login username: {result['username']}")
                     if not pw:
                         print(f"  Temporary password (shown only now): {result['initialPassword']}")
-                        print('  Give this password privately to the customer; an Owner can reset it under 15 → 5.')
+                        print('  Give this password privately to the customer; an Owner can reset it under 20 → 5.')
                     else:
                         print('  Customer can now sign in using the password entered above.')
             elif choice == '2':
@@ -1288,7 +1289,7 @@ def loyalty_staff_menu(svc: LoyaltyService, user: dict) -> None:
                        ('name', 'Name'), ('username', 'Username'),
                        ('userStatus', 'Login'), ('loyaltyStatus', 'Loyalty'),
                        ('pointsBalance', 'Points')])
-                print('  Not enrolled? Use 19 → 2 with their User ID. Use Customer ID when linking orders.')
+                print('  Not enrolled? Use 5 → 2 with their User ID. Use Customer ID when linking orders.')
             else:
                 print('  Invalid selection.')
         except (LoyaltyError, sqlite3.Error) as exc:
@@ -1323,7 +1324,7 @@ def _show_payroll(pay: PayrollService, actor_id: int, payroll: Payroll) -> None:
     elif payroll.status == 'Draft':
         if any(e.employeeID not in employees for e in payroll.entries):
             print('  An employee on this draft is inactive. Enable their Employee '
-                  'account in main menu option 15, or remove them with payroll option 8.')
+                  'account in main menu option 20, or remove them with payroll option 8.')
         if any(e.employeeID in employees and not employees[e.employeeID].getHourlyRate()
                for e in payroll.entries):
             print('  An employee has no hourly rate. Set it with option 7 before calculating.')
@@ -1406,7 +1407,7 @@ def payroll_menu(svc: InventoryService, user: dict) -> None:
                 _show_payroll(pay, actor, payroll)
                 employees = {e.employeeID: e for e in pay.employees(actor)}
                 if not employees:
-                    print('  No active employees. Use main menu option 15 to create or '
+                    print('  No active employees. Use main menu option 20 to create or '
                           'enable an Employee account first.')
                     continue
                 print('\n  Active employees available to add or update:')
@@ -1480,7 +1481,7 @@ def payroll_menu(svc: InventoryService, user: dict) -> None:
             elif choice == '7':
                 employees = pay.employees(actor)
                 if not employees:
-                    print('  No active employees. Use main menu option 15 to create or '
+                    print('  No active employees. Use main menu option 20 to create or '
                           'enable an Employee account first.')
                     continue
                 _show_employees(pay, actor)
@@ -1538,6 +1539,130 @@ def payroll_menu(svc: InventoryService, user: dict) -> None:
             print(f'\n  Not saved: {exc}')
         input('\nPress Enter to continue...')
 
+def _display_feedback(records: list[Feedback]) -> None:
+    """Show complete feedback comments without truncating multiline messages."""
+    if not records:
+        print('  No feedback has been submitted yet.')
+        return
+    for record in records:
+        customer_label = f'Customer #{record.customerID}'
+        if record.customerName:
+            customer_label += f' — {record.customerName}'
+        if record.customerUsername:
+            customer_label += f' ({record.customerUsername})'
+        print(f'\n  Feedback #{record.feedbackID} | {customer_label} | '
+              f'{record.submissionDate} | {record.status}')
+        if record.rating is not None:
+            print(f'  Rating: {record.rating}/5')
+        for line in record.feedbackText.splitlines():
+            print(f'  {line}')
+
+
+def _feedback_review_id() -> int | None:
+    """Read a feedback ID; zero or an empty response returns to the feedback menu."""
+    while True:
+        raw = prompt('Feedback ID to mark reviewed (0 or Enter to go back)')
+        if raw in ('', '0'):
+            return None
+        try:
+            feedback_id = int(raw)
+            if feedback_id > 0:
+                return feedback_id
+        except ValueError:
+            pass
+        print('  Enter a positive whole-number Feedback ID, or 0 / Enter to go back.')
+
+
+def feedback_menu(svc: FeedbackService, user: dict) -> None:
+    """Feedback submission and review using the signed-in shop account."""
+    while True:
+        role = user['role']
+        if role == 'Customer':
+            heading('FEEDBACK SYSTEM | Customer')
+            print('  1. Submit feedback    2. View my submissions    0. Back')
+        elif role in ('Employee', 'Owner'):
+            heading('FEEDBACK SYSTEM | Employee / Owner')
+            print('  1. View customer feedback    2. Mark feedback reviewed    0. Back')
+        else:
+            print('  Feedback is unavailable for this account role. Contact an Owner.')
+            return
+        choice = prompt('Select feedback option (0 or Enter to go back)')
+        if choice in ('0', ''):
+            return
+        try:
+            if role == 'Customer' and choice == '1':
+                text = prompt('Your feedback (required; maximum 2000 characters; /back to cancel)')
+                if text.casefold() == '/back':
+                    print('  Feedback submission cancelled; nothing was saved.')
+                    continue
+                raw_rating = prompt('Rating 1-5 (optional; Enter to skip)')
+                if not raw_rating:
+                    rating = None
+                elif raw_rating in ('1', '2', '3', '4', '5'):
+                    rating = int(raw_rating)
+                else:
+                    raise FeedbackError('Rating must be a whole number from 1 to 5, or blank to skip.')
+                saved = svc.submit_feedback(user['userID'], text, rating)
+                print(f'  Feedback #{saved.feedbackID} was successfully received and saved.')
+            elif role == 'Customer' and choice == '2':
+                submitted = svc.view_submitted_feedback(user['userID'])
+                if not submitted:
+                    print('  You have not submitted feedback yet. Choose option 1 to send a comment.')
+                else:
+                    _display_feedback(submitted)
+            elif role in ('Employee', 'Owner') and choice == '1':
+                records = svc.view_feedback(user['userID'])
+                if not records:
+                    print('  No customer feedback has been submitted yet. '
+                          'A Customer can submit it from their own option 6 -> 1.')
+                else:
+                    _display_feedback(records)
+            elif role in ('Employee', 'Owner') and choice == '2':
+                pending = svc.view_feedback(user['userID'], status='Submitted')
+                if not pending:
+                    print('  There is no feedback waiting for review. '
+                          'New customer submissions will appear here.')
+                    input('\nPress Enter to continue...')
+                    continue
+                print('  Feedback awaiting review (choose an ID below):')
+                _display_feedback(pending)
+                target_id = _feedback_review_id()
+                if target_id is None:
+                    print('  Returned to the Feedback System menu.')
+                    continue
+                matching = next((item for item in pending if item.feedbackID == target_id), None)
+                if matching is None:
+                    # Distinguish an already-reviewed record from an unknown ID.
+                    existing = svc.view_feedback(user['userID'], target_id)
+                    if existing:
+                        print(f'  Feedback #{target_id} has already been reviewed. '
+                              'Select an ID marked Submitted.')
+                    else:
+                        print(f'  Feedback #{target_id} was not found. '
+                              'Select an ID from the list or return with 0 / Enter.')
+                    input('\nPress Enter to continue...')
+                    continue
+                if confirm('Mark this feedback as reviewed?'):
+                    updated = svc.review_feedback(user['userID'], target_id)
+                    print(f'  Feedback #{updated.feedbackID} is now {updated.status}.')
+                else:
+                    print('  Review cancelled; status was not changed.')
+            else:
+                print('  Invalid selection. Choose 1, 2, or 0 to go back.')
+                input('\nPress Enter to continue...')
+                continue
+        except FeedbackStorageError as exc:
+            print(f'  {exc}')
+            print('  You may retry from this menu; no partial feedback was saved.')
+        except FeedbackError as exc:
+            print(f'  {exc}')
+        except (sqlite3.Error, OSError) as exc:
+            print('  Feedback is temporarily unavailable because the shop database '
+                  'could not be accessed. Confirm the application folder is writable '
+                  'and the database is available, then try again.')
+        input('\nPress Enter to continue...')
+
+
 def menu(svc: InventoryService, user: dict) -> None:
     while True:
         # Do not let an already-open session retain privileges after an Owner
@@ -1551,68 +1676,87 @@ def menu(svc: InventoryService, user: dict) -> None:
         user.update(live[0])
         if user['role'] == 'Customer':
             heading(f"ONIGIRI SHOP | Customer | {user['name']}")
-            print("  18. My Profile    19. My Loyalty    17. Log out    0. Exit")
+            print('''
+  CUSTOMER SERVICES
+   5. My Loyalty                  6. Feedback System
+
+  ACCOUNT
+  22. My Profile                 23. Log out
+   0. Exit
+''')
             selection = prompt("Select an option")
             if selection == "0":
                 raise SystemExit(0)
-            if selection == "17":
+            if selection == "23":
                 print("  Logged out.")
                 return
-            if selection not in ("18", "19"):
+            if selection not in ("5", "6", "22"):
                 print("  Invalid selection. Customer inventory administration is not available.")
                 continue
             try:
-                if selection == "18":
+                if selection == "22":
                     profile_menu(ProfileService(svc.db_path), user)
-                else:
+                elif selection == "5":
                     loyalty_customer_menu(LoyaltyService(svc.db_path), user)
-            except (ProfileError, LoyaltyError, sqlite3.Error, OSError) as exc:
+                else:
+                    feedback_menu(FeedbackService(svc.db_path), user)
+            except (ProfileError, LoyaltyError, FeedbackError, sqlite3.Error, OSError) as exc:
                 print(f"  Request could not be completed: {exc}")
             input("\nPress Enter to return to the menu...")
             continue
         heading(f"ONIGIRI SHOP | Management System | {user['name']} ({user['role']})")
         print('''
-   1. View inventory                   12. View inventory purchase orders
-   2. Add ingredient                   13. View transaction history
-   3. Set reorder level                14. Manage suppliers
-   4. Manually adjust inventory        15. Manage users (Owner)
-   5. Receive supplier delivery        16. Demo / backup / reset (Owner)
-   6. Create/edit recipe               17. Log out
-   7. View recipes                     18. My Profile
-   8. Create customer order            19. Loyalty Program
-   9. View/complete customer orders    20. Payroll (Owner)
-  10. Review low-stock alerts          21. Accounting Ledger (Owner)
-  11. Create inventory purchase order  22. Trend Predicting Dashboard
-                                        0. Exit
+  ORDERS & CUSTOMERS
+   1. Create customer order             4. View recipes
+   2. View/complete customer orders     5. Loyalty Program
+   3. Create/edit recipe                6. Feedback System
+
+  INVENTORY & PURCHASING
+   7. View inventory                   12. Create inventory purchase order
+   8. Add ingredient                   13. View inventory purchase orders
+   9. Manually adjust inventory        14. Receive supplier delivery
+  10. Set reorder level                15. Manage suppliers
+  11. Review low-stock alerts          16. View transaction history
+
+  MANAGEMENT & REPORTING
+  17. Payroll (Owner)                  20. Manage users (Owner)
+  18. Accounting Ledger (Owner)        21. Demo / backup / reset (Owner)
+  19. Trend Predicting Dashboard
+
+  ACCOUNT
+  22. My Profile
+  23. Log out
+   0. Exit
 ''')
         selection = prompt("Select an option")
         if selection == "0":
             raise SystemExit(0)
-        if selection == "17":
+        if selection == "23":
             print("  Logged out.")
             return
         actions = {
-            "1": lambda: inventory_view(svc),
-            "2": lambda: create_ingredient(svc, user),
-            "3": lambda: set_reorder(svc),
-            "4": lambda: adjustment(svc, user),
-            "5": lambda: delivery(svc, user),
-            "6": lambda: edit_recipe(svc),
-            "7": lambda: recipes_menu(svc),
-            "8": lambda: order_create(svc, user),
-            "9": lambda: orders_menu(svc, user),
-            "10": lambda: alerts_menu(svc),
-            "11": lambda: purchase_create(svc),
-            "12": lambda: purchase_menu(svc),
-            "13": lambda: transaction_history(svc),
-            "14": lambda: suppliers_menu(svc),
-            "15": lambda: employees_menu(svc, user),
-            "16": lambda: demo_menu(svc, user),
-            "18": lambda: profile_menu(ProfileService(svc.db_path), user),
-            "19": lambda: loyalty_staff_menu(LoyaltyService(svc.db_path), user),
-            "20": lambda: payroll_menu(svc, user),
-            "21": lambda: accounting_menu(user, svc.db_path),
-            "22": lambda: TrendPredictingDashboard(svc.db_path).run(),
+            "1": lambda: order_create(svc, user),
+            "2": lambda: orders_menu(svc, user),
+            "3": lambda: edit_recipe(svc),
+            "4": lambda: recipes_menu(svc),
+            "5": lambda: loyalty_staff_menu(LoyaltyService(svc.db_path), user),
+            "6": lambda: feedback_menu(FeedbackService(svc.db_path), user),
+            "7": lambda: inventory_view(svc),
+            "8": lambda: create_ingredient(svc, user),
+            "9": lambda: adjustment(svc, user),
+            "10": lambda: set_reorder(svc),
+            "11": lambda: alerts_menu(svc),
+            "12": lambda: purchase_create(svc),
+            "13": lambda: purchase_menu(svc),
+            "14": lambda: delivery(svc, user),
+            "15": lambda: suppliers_menu(svc),
+            "16": lambda: transaction_history(svc),
+            "17": lambda: payroll_menu(svc, user),
+            "18": lambda: accounting_menu(user, svc.db_path),
+            "19": lambda: TrendPredictingDashboard(svc.db_path).run(),
+            "20": lambda: employees_menu(svc, user),
+            "21": lambda: demo_menu(svc, user),
+            "22": lambda: profile_menu(ProfileService(svc.db_path), user),
         }
         action = actions.get(selection)
         if not action:
@@ -1622,7 +1766,7 @@ def menu(svc: InventoryService, user: dict) -> None:
             needs_login = action()
             if needs_login is True:
                 return
-        except (InventoryError, ProfileError, LoyaltyError, PayrollError, AccountingError,
+        except (InventoryError, ProfileError, LoyaltyError, FeedbackError, PayrollError, AccountingError,
                 sqlite3.Error, OSError) as exc:
             print(f"\n  Not saved: {exc}")
             if isinstance(exc, sqlite3.Error):

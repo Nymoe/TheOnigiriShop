@@ -188,7 +188,7 @@ def initialize(db_path: str | Path | None = None) -> bool:
                 CREATE INDEX IF NOT EXISTS idx_inv_orderlines_order
                     ON InventoryOrderLine(inventoryOrderID);
             ''')
-            # Only option 16 -> 7 populates this import ledger. This table stores
+            # Only option 21 -> 7 populates this import ledger. This table stores
             # provenance, not sample users, so edited sample profiles remain editable
             # without the next optional import overwriting their changes.
             db.execute('''
@@ -245,8 +245,27 @@ def initialize(db_path: str | Path | None = None) -> bool:
                 CREATE INDEX IF NOT EXISTS idx_loyalty_history
                     ON LoyaltyTransaction(loyaltyAccountID, loyaltyTransactionID);
             ''')
-            # Both class diagrams share the loyalty tables but differ on IDs.
-            # Keep original integer FKs and expose stable public UUIDs as well.
+            # Store customer feedback alongside the existing account and order data.
+            # Add this table without modifying or deleting existing records.
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS Feedback (
+                    feedbackID INTEGER PRIMARY KEY,
+                    publicUUID TEXT NOT NULL UNIQUE,
+                    customerID INTEGER NOT NULL,
+                    feedbackText TEXT NOT NULL CHECK(length(trim(feedbackText)) > 0),
+                    rating INTEGER CHECK(rating IS NULL OR rating BETWEEN 1 AND 5),
+                    submissionDate TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Submitted'
+                        CHECK(status IN ('Submitted', 'Reviewed')),
+                    FOREIGN KEY(customerID) REFERENCES Customer(customerID)
+                );
+                CREATE INDEX IF NOT EXISTS idx_feedback_customer
+                    ON Feedback(customerID, feedbackID);
+                CREATE INDEX IF NOT EXISTS idx_feedback_status
+                    ON Feedback(status, feedbackID);
+            ''')
+            # Keep existing integer foreign keys for loyalty and expose stable
+            # public UUIDs for interfaces that need external identifiers.
             _ensure_column(db, 'LoyaltyAccount', 'status',
                            "TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active','Suspended'))")
             _ensure_column(db, 'LoyaltyAccount', 'publicUUID', 'TEXT')
