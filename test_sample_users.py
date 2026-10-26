@@ -1,4 +1,4 @@
-"""Regression tests for option 16 -> 7; all tests use disposable databases."""
+"""Regression tests for option 21 -> 7; all tests use disposable databases."""
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -114,7 +114,7 @@ class SampleUserImportTests(unittest.TestCase):
             self.assertFalse(demo_menu(self.svc, user))
         self.assertEqual(len(self.svc.list_users()), 2)
         # Now follow the full authenticated main-menu route.
-        with patch('inventory_cli.prompt', side_effect=['16', '7', '0', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['21', '7', '0', '23']), \
              patch('inventory_cli.confirm', return_value=True), \
              patch('inventory_cli.getpass', return_value='owner-strong-password'), \
              patch('builtins.input', return_value=''):

@@ -194,7 +194,7 @@ class TrendPredictingDashboard:
     def display_history(self, history, data_type):
         print(f'\nHistorical {data_type.lower()} data:')
         if not history:
-            print('No historical records available. Complete orders under options 8 or 9 first.')
+            print('No historical records available. Complete orders under options 1 or 2 first.')
         for item in history:
             print(f"  {item['date']}: {item['value']:,.2f} {self.LABELS[data_type]}")
 
@@ -224,7 +224,7 @@ class TrendPredictingDashboard:
             print(f'Unable to read inventory: {exc}. Check the database and restart.')
             return
         if not ingredients:
-            print('No ingredients yet. Add inventory from main menu option 2 first.')
+            print('No ingredients yet. Add inventory from main menu option 8 first.')
             return
         while True:
             print('\n=== Ingredient Forecasting ===')
@@ -253,7 +253,7 @@ class TrendPredictingDashboard:
             print(f'Reorder level: {reorder:,.2f} {unit}')
             if not history:
                 print('No customer-order consumption recorded for this ingredient yet.')
-                print('Complete an order for a recipe containing it (main menu option 8 or 9).')
+                print('Complete an order for a recipe containing it (main menu option 1 or 2).')
                 self._pause()
                 continue
             print('Historical consumption:')

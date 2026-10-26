@@ -193,7 +193,7 @@ def populate_trend_history(svc: InventoryService, user_id: int) -> dict[str, int
                                       ('North Shore Rice & Dry Goods (Demo)',)).fetchone()
         if starter_supplier is None:
             raise InventoryError('The starter shop dataset is required for order history. '
-                                 'Load 16 -> 1 -> 1 first (or reset after backing up if stock already exists).')
+                                 'Load 21 -> 1 -> 1 first (or reset after backing up if stock already exists).')
 
         recipe_ids = []
         recipes = {}
@@ -201,13 +201,13 @@ def populate_trend_history(svc: InventoryService, user_id: int) -> dict[str, int
             recipe = db.execute('SELECT recipeID, price FROM Recipe WHERE name=?', (name,)).fetchone()
             if recipe is None or recipe['price'] is None or recipe['price'] <= 0:
                 raise InventoryError(f'Sample recipe {name!r} is missing or has no positive price. '
-                                     'Check recipes in option 7 before loading order history.')
+                                     'Check recipes in option 4 before loading order history.')
             ingredients = list(db.execute('''SELECT ingredientID,quantityRequired
                                               FROM RecipeIngredient WHERE recipeID=?''',
                                           (recipe['recipeID'],)))
             if not ingredients:
                 raise InventoryError(f'Sample recipe {name!r} has no ingredients. '
-                                     'Finish its ingredient setup under option 6.')
+                                     'Finish its ingredient setup under option 3.')
             recipe_ids.append(recipe['recipeID'])
             recipes[recipe['recipeID']] = (float(recipe['price']), ingredients)
 
@@ -331,7 +331,7 @@ def populate_payroll_activity(svc: InventoryService, user_id: int) -> dict[str, 
         if not active:
             raise InventoryError('A sample payroll needs at least one active Employee with an '
                                  'hourly rate. Create/enable an Employee under 15, then set '
-                                 'their rate under 20 -> 7 before retrying.')
+                                 'their rate under 17 -> 7 before retrying.')
         pay_day = None
         for ago in range(3, 90):
             candidate = (date.today() - timedelta(days=ago)).isoformat()

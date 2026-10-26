@@ -166,10 +166,10 @@ class IntegratedUserProfileTests(unittest.TestCase):
         self.assertEqual(self.profiles.view_profile(sample).email, 'emma-new@example.test')
         self.assertEqual(self.profiles.view_profile(sample).name, 'Edited Emma')
 
-    def test_option_18_customer_route_and_option_19_loyalty_route(self):
+    def test_option_22_customer_profile_and_option_5_loyalty_route(self):
         load_sample_users(self.svc, self.owner)
         customer = self.svc.login('maya.customer', DEMO_PASSWORDS['Customer'])
-        with patch('inventory_cli.prompt', side_effect=['18', '19', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['22', '5', '23']), \
              patch('inventory_cli.confirm', side_effect=[False, True]), \
              patch('builtins.input', return_value=''):
             menu(self.svc, customer)

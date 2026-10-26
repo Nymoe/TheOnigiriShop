@@ -200,23 +200,23 @@ class TrendDashboardTests(unittest.TestCase):
             db.commit()
         with patch('builtins.input', side_effect=['2', '0']), redirect_stdout(StringIO()) as out:
             TrendPredictingDashboard(self.path).run()
-        self.assertIn('Add inventory from main menu option 2 first', out.getvalue())
+        self.assertIn('Add inventory from main menu option 8 first', out.getvalue())
 
-    def test_main_menu_keeps_older_numbers_and_routes_new_22(self):
+    def test_main_menu_routes_trend_dashboard_after_renumbering(self):
         owner = self.shop.login('owner', 'owner-password')
-        with patch('inventory_cli.prompt', side_effect=['22', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['19', '23']), \
              patch('inventory_cli.TrendPredictingDashboard') as dashboard, \
              patch('builtins.input', return_value=''), redirect_stdout(StringIO()) as output:
             menu(self.shop, owner)
         dashboard.assert_called_once_with(self.path)
         dashboard.return_value.run.assert_called_once_with()
-        self.assertIn('21. Accounting Ledger (Owner)', output.getvalue())
-        self.assertIn('22. Trend Predicting Dashboard', output.getvalue())
+        self.assertIn('18. Accounting Ledger (Owner)', output.getvalue())
+        self.assertIn('19. Trend Predicting Dashboard', output.getvalue())
 
     def test_employee_can_use_dashboard_but_customer_cannot_open_staff_menu(self):
         self.shop.create_user('Employee', 'employee', 'employee-password', 'Employee')
         employee = self.shop.login('employee', 'employee-password')
-        with patch('inventory_cli.prompt', side_effect=['22', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['19', '23']), \
              patch('inventory_cli.TrendPredictingDashboard') as dashboard, \
              patch('builtins.input', return_value=''), redirect_stdout(StringIO()):
             menu(self.shop, employee)
@@ -224,7 +224,7 @@ class TrendDashboardTests(unittest.TestCase):
 
         self.shop.create_user('Customer', 'customer', 'customer-pass', 'Customer')
         customer = self.shop.login('customer', 'customer-pass')
-        with patch('inventory_cli.prompt', side_effect=['22', '17']), \
+        with patch('inventory_cli.prompt', side_effect=['19', '23']), \
              patch('inventory_cli.TrendPredictingDashboard') as blocked, \
              redirect_stdout(StringIO()) as output:
             menu(self.shop, customer)
