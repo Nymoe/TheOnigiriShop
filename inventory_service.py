@@ -16,6 +16,7 @@ import sqlite3
 from uuid import uuid4
 
 from inventory_db import connect, initialize, transaction
+from accounting_service import post_source_transaction
 from profile_service import _validate_dob, _validate_phone
 
 EPSILON = 1e-8
@@ -208,23 +209,26 @@ class InventoryService:
                             *, supplier_id: int | None = None,
                             customer_order_id: int | None = None,
                             inventory_order_id: int | None = None,
-                            notes: str = "") -> None:
-        timestamp = _today()
-        db.execute('''
+                            notes: str = "", transaction_date: str | None = None) -> int:
+        # An explicit date is used only when loading historical sample activity.
+        timestamp = transaction_date or _today()
+        movement_id = db.execute('''
             INSERT INTO InventoryTransaction
                 (ingredientID, userID, supplierID, customerOrderID,
                  inventoryOrderID, transactionType, quantity, transactionDate, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (ingredient_id, user_id, supplier_id, customer_order_id,
-              inventory_order_id, action, delta, timestamp, notes))
+              inventory_order_id, action, delta, timestamp, notes)).lastrowid
         # Mirror stock movements to the broad system's existing InventoryAdjustment.
         db.execute('''
             INSERT INTO InventoryAdjustment(quantityChange, reason, adjustmentDate, ingredientID)
             VALUES (?, ?, ?, ?)
-        ''', (delta, action if not notes else f"{action}: {notes}", _date_today(), ingredient_id))
+        ''', (delta, action if not notes else f"{action}: {notes}", timestamp[:10], ingredient_id))
+        return int(movement_id)
 
     def _apply_change(self, db: sqlite3.Connection, ingredient_id: int, delta: float,
                       user_id: int | None, action: str, **kwargs) -> float:
+        recorded_ids = kwargs.pop('recorded_ids', None)
         item = _must_get(db, "InventoryItem", "ingredientID", ingredient_id)
         new_qty = float(item["quantityOnHand"]) + delta
         if new_qty < -EPSILON:
@@ -235,20 +239,36 @@ class InventoryService:
         new_qty = max(0.0, round(new_qty, 8))
         db.execute('UPDATE InventoryItem SET quantityOnHand=? WHERE ingredientID=?',
                    (new_qty, ingredient_id))
-        self._record_transaction(db, ingredient_id, user_id, action, delta, **kwargs)
+        movement_id = self._record_transaction(db, ingredient_id, user_id, action, delta, **kwargs)
+        if recorded_ids is not None:
+            recorded_ids.append(movement_id)
         self._sync_alert(db, ingredient_id)
         return new_qty
 
     def adjust_stock(self, ingredient_id: int, action: str, quantity: float,
-                     user_id: int, notes: str = "") -> float:
+                     user_id: int, notes: str = "",
+                     *, accounting_amount: float | None = None) -> float:
         quantity = _quantity(quantity)
         action = action.strip().lower()
         if action not in {"add", "remove"}:
             raise InventoryError("Choose add or remove.")
         delta = quantity if action == "add" else -quantity
         with transaction(self.db_path) as db:
-            return self._apply_change(db, _ident(ingredient_id), delta, user_id,
-                                      "Manual Adjustment", notes=notes.strip())
+            movements: list[int] = []
+            new_level = self._apply_change(db, _ident(ingredient_id), delta, user_id,
+                                           "Manual Adjustment", notes=notes.strip(),
+                                           recorded_ids=movements)
+            if accounting_amount is not None:
+                if isinstance(accounting_amount, bool) or float(accounting_amount) <= 0:
+                    raise InventoryError('Enter a positive accounting value for this adjustment, '
+                                         'or leave it blank when the value is unknown.')
+                post_source_transaction(
+                    db, kind='Inventory Adjustment', when=_date_today(),
+                    description=f'Manual inventory {action} for ingredient #{ingredient_id}',
+                    reference=f'ADJUSTMENT-{movements[0]}', amount=accounting_amount,
+                    source_type='Adjustment', source_id=movements[0],
+                )
+            return new_level
 
     # ----- SUPPLIERS / DELIVERIES -----
     def add_supplier(self, name: str, contact_info: str = "") -> int:
@@ -266,11 +286,14 @@ class InventoryService:
 
     def receive_delivery(self, quantities: dict[int, float], user_id: int,
                          supplier_id: int | None = None,
-                         purchase_order_id: int | None = None) -> None:
+                         purchase_order_id: int | None = None,
+                         *, purchase_amount: float | None = None,
+                         invoice_reference: str = '') -> int | None:
         if not quantities:
             raise InventoryError("Select at least one ingredient to receive.")
         clean = {_ident(k, "Ingredient ID"): _quantity(v) for k, v in quantities.items()}
         with transaction(self.db_path) as db:
+            movement_ids: list[int] = []
             if supplier_id is not None:
                 _must_get(db, "Supplier", "supplierID", _ident(supplier_id))
             if purchase_order_id is not None:
@@ -296,7 +319,8 @@ class InventoryService:
             for ingredient_id, quantity in clean.items():
                 self._apply_change(db, ingredient_id, quantity, user_id, "Supplier Delivery",
                                    supplier_id=supplier_id,
-                                   inventory_order_id=purchase_order_id)
+                                   inventory_order_id=purchase_order_id,
+                                   recorded_ids=movement_ids)
                 if purchase_order_id is not None:
                     db.execute('UPDATE InventoryOrderLine SET receivedQuantity=receivedQuantity+? '
                                'WHERE inventoryOrderID=? AND ingredientID=?',
@@ -307,6 +331,20 @@ class InventoryService:
                 complete = all(r["receivedQuantity"] >= r["quantityOrdered"] - EPSILON for r in lines)
                 db.execute('UPDATE InventoryOrder SET status=? WHERE inventoryOrderID=?',
                            ("Received" if complete else "Partially Received", purchase_order_id))
+            if purchase_amount is not None:
+                if isinstance(purchase_amount, bool) or float(purchase_amount) <= 0:
+                    raise InventoryError('A supplier invoice amount must be greater than zero; '
+                                         'leave it blank if not yet known.')
+                receipt_id = movement_ids[0]
+                return post_source_transaction(
+                    db, kind='Purchase', when=_date_today(),
+                    description=(f'Supplier delivery for purchase order #{purchase_order_id}'
+                                 if purchase_order_id is not None
+                                 else f'Supplier delivery #{receipt_id}'),
+                    reference=invoice_reference.strip() or f'DELIVERY-{receipt_id}',
+                    amount=purchase_amount, source_type='Delivery', source_id=receipt_id,
+                )
+            return None
 
     # ----- RECIPES (join table stores quantity of each ingredient per serving) -----
     def add_recipe(self, name: str, price: float = 0) -> int:
@@ -379,7 +417,7 @@ class InventoryService:
             return order_id
 
     def customer_orders(self) -> list[dict]:
-        # Include existing broad-system orders. POC-created orders have OrderRecipe rows.
+        # Include existing shared orders; orders created here have OrderRecipe rows.
         return self._read('''SELECT o.orderID, o.orderDate, o.totalAmount, o.status, o.customerID,
                                     COUNT(orcp.recipeID) AS recipesCount
                              FROM "Order" o LEFT JOIN OrderRecipe orcp ON o.orderID=orcp.orderID
@@ -455,7 +493,14 @@ class InventoryService:
             self._apply_change(db, ingredient_id, -qty, user_id, "Customer Order",
                                customer_order_id=order_id, notes=f"Order #{order_id} completed")
         db.execute('UPDATE "Order" SET status=? WHERE orderID=?', ("Completed", order_id))
-        return {"order_id": order_id, "deductions": dict(required)}
+        sale_id = post_source_transaction(
+            db, kind='Sale', when=order['orderDate'] or _date_today(),
+            description=f'Completed customer order #{order_id}',
+            reference=f'ORDER-{order_id}', amount=order['totalAmount'],
+            source_type='Order', source_id=order_id,
+        )
+        return {"order_id": order_id, "deductions": dict(required),
+                "accounting_transaction_id": sale_id}
 
     def cancel_customer_order(self, order_id: int) -> None:
         with transaction(self.db_path) as db:

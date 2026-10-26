@@ -12,6 +12,7 @@ import sqlite3
 
 from inventory_db import connect, initialize, transaction
 from payroll import Employee, Payroll, PayrollEntry, PayrollError
+from accounting_service import post_source_transaction
 
 
 def _ident(value: object, label: str) -> int:
@@ -158,7 +159,7 @@ class PayrollService:
 
     def enter_hours(self, actor_id: int, payroll_id: int, employee_id: int,
                     hours_worked: object, overtime_hours: object = 0) -> None:
-        """Step 3 and subflow S-4.1: enter or correct one employee's hours."""
+        """Enter or correct hours for an employee in a draft payroll."""
         with transaction(self.db_path) as db:
             _owner_id(db, actor_id)
             payroll = _load(db, payroll_id)
@@ -189,7 +190,7 @@ class PayrollService:
             _clear_calculation(db, payroll.payrollID)
 
     def check_hours(self, actor_id: int, payroll_id: int) -> list[str]:
-        """Step 4: Payroll.validateHours(); returns the problems to correct (S-4.1)."""
+        """Validate recorded employee hours and return problems to correct."""
         db = connect(self.db_path)
         try:
             _owner_id(db, actor_id)
@@ -240,11 +241,13 @@ class PayrollService:
             _owner_id(db, actor_id)
             payroll = _load(db, payroll_id)
             expense = payroll.recordExpense(today or date.today())
-            transaction_id = db.execute(
-                '''INSERT INTO AccountingTransaction(ledgerID, date, description, reference, amount, type)
-                   VALUES(1,?,?,?,?,?)''',
-                (expense.date, expense.description, expense.reference, expense.amount, expense.type)
-            ).lastrowid
+            transaction_id = post_source_transaction(
+                db, kind=expense.type, when=expense.date,
+                description=expense.description, reference=expense.reference,
+                amount=expense.amount, source_type='Payroll', source_id=payroll_id,
+            )
+            if transaction_id is None:
+                raise PayrollError('This payroll has no positive payment amount to post.')
             db.execute('UPDATE Payroll SET status=?, accountingTransactionID=? WHERE payrollID=?',
                        (payroll.status, transaction_id, payroll.payrollID))
             return transaction_id

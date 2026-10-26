@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 from getpass import getpass
+from datetime import date
 import sqlite3
 
 from inventory_service import InventoryError, InventoryService, InsufficientStockError
-from demo_tools import backup_database, list_backups, reset_database, restore_database
+from demo_tools import (backup_database, list_backups, reset_database, restore_database,
+                        populate_trend_history, populate_accounting_activity,
+                        populate_payroll_activity)
 from sample_users import load_sample_users
 from profile_service import ProfileError, ProfileNotFoundError, ProfileService
 from user_management_service import UserManagementService
 from loyalty_service import LoyaltyError, LoyaltyService, AccountNotFoundError
 from payroll import DEDUCTION_RATE, OVERTIME_MULTIPLIER, Payroll, PayrollError
 from payroll_service import PayrollService
+from accounting_service import AccountingError, AccountingLedger, AccountingTransaction, TRANSACTION_TYPES
+from trend_prediction_service import TrendPredictingDashboard
 
 
 def heading(text: str) -> None:
@@ -80,6 +85,22 @@ def confirm(text: str, default_yes: bool = False) -> bool:
     return option in {"y", "yes"}
 
 
+def optional_cad_amount(label: str) -> float | None:
+    """Blank means that no financial valuation has been provided."""
+    from decimal import Decimal, InvalidOperation
+    while True:
+        raw = prompt(label)
+        if not raw:
+            return None
+        try:
+            amount = Decimal(raw)
+            if amount.is_finite() and amount > 0 and amount == amount.quantize(Decimal('0.01')):
+                return float(amount)
+        except (InvalidOperation, ValueError):
+            pass
+        print('  Enter a positive dollar amount with at most two decimals, or leave it blank.')
+
+
 def inventory_view(svc: InventoryService) -> None:
     items = svc.inventory()
     for i in items:
@@ -111,19 +132,28 @@ def set_reorder(svc: InventoryService) -> None:
 
 
 def adjustment(svc: InventoryService, user: dict) -> None:
-    heading("Manual inventory adjustment (S-5)")
+    heading("Manual inventory adjustment")
     inventory_view(svc)
-    item_id = ask_id("Ingredient ID")
+    item_id = ask_id("Ingredient ID (blank to return)", optional=True)
+    if item_id is None:
+        return
     action = prompt("Add or remove inventory (a/r)").casefold()
     if action not in {"a", "r"}:
         print("  Cancelled: select a or r.")
         return
     qty = ask_number("Quantity to adjust")
     notes = prompt("Reason / notes")
+    print('  A stock adjustment has no monetary value unless one is provided.')
+    accounting_amount = optional_cad_amount('Adjustment value in CAD (blank if unknown)')
     word = "add" if action == "a" else "remove"
     if confirm(f"Confirm: {word} {qty:g} from ingredient #{item_id}?"):
-        new_level = svc.adjust_stock(item_id, word, qty, user["userID"], notes)
+        new_level = svc.adjust_stock(item_id, word, qty, user["userID"], notes,
+                                     accounting_amount=accounting_amount)
         print(f"  Saved. New stock level: {new_level:g}.")
+        if accounting_amount is not None:
+            print(f'  Inventory Adjustment value of ${accounting_amount:,.2f} posted to Accounting Ledger.')
+        else:
+            print('  Quantity recorded only; no financial adjustment posted without a value.')
         inventory_view(svc)
 
 
@@ -159,21 +189,39 @@ def collect_lines(svc: InventoryService, *, receipt_order_id: int | None = None)
 
 
 def delivery(svc: InventoryService, user: dict) -> None:
-    heading("Receive supplier delivery (S-6)")
+    heading("Receive supplier delivery")
     table(svc.suppliers(), [("supplierID", "ID"), ("name", "Supplier")])
     supplier_id = ask_id("Supplier ID (blank if unknown)", optional=True)
     po_id = None
     if confirm("Is this delivery linked to a confirmed inventory purchase order?"):
         show_purchase_orders(svc)
-        po_id = ask_id("Purchase order ID")
+        po_id = ask_id("Purchase order ID (blank to cancel)", optional=True)
+        if po_id is None:
+            print('  Delivery cancelled. No stock or accounting entry was saved.')
+            return
     items = collect_lines(svc, receipt_order_id=po_id)
     if not items:
         print("  No items selected. Nothing saved.")
         return
+    print('  Supplier costs are not stored in ingredient quantities or purchase orders.')
+    print('  Enter an invoice amount to also record a financial Purchase in the Accounting Ledger.')
+    purchase_amount = optional_cad_amount('Supplier invoice amount in CAD (blank if not available)')
+    invoice_reference = (prompt('Supplier invoice/reference (blank = generated reference)')
+                         if purchase_amount is not None else '')
     print("  Receiving:", ", ".join(f"#{key}: +{qty:g}" for key, qty in items.items()))
+    if purchase_amount is not None:
+        print(f'  Accounting Purchase: ${purchase_amount:,.2f} CAD' +
+              (f' | Reference: {invoice_reference}' if invoice_reference else ' | Automatic reference'))
     if confirm("Confirm receipt?"):
-        svc.receive_delivery(items, user["userID"], supplier_id, po_id)
+        accounting_id = svc.receive_delivery(items, user["userID"], supplier_id, po_id,
+                                             purchase_amount=purchase_amount,
+                                             invoice_reference=invoice_reference)
         print("  Delivery recorded. Inventory updated.")
+        if accounting_id is not None:
+            print(f'  Purchase posted to Accounting Ledger as transaction #{accounting_id}.')
+        else:
+            print('  No financial Purchase posted because no invoice amount was entered. '
+                  'Record the invoice later in Accounting option 3 when its value is known.')
         inventory_view(svc)
 
 
@@ -317,6 +365,10 @@ def complete_order_flow(svc: InventoryService, user: dict, order_id: int) -> Non
         print(f"  Completed order #{result['order_id']}. Stock deducted and "
               f"{result['pointsEarned']} loyalty points earned.")
         print('\n' + loyalty.generate_receipt(result['loyaltyTransactionID']))
+    if result.get('accounting_transaction_id') is not None:
+        print(f"  Sale posted to Accounting Ledger as transaction #{result['accounting_transaction_id']}.")
+    elif result.get('finalAmount', order['totalAmount']) == 0:
+        print('  No financial Sale posted: this order has a zero-dollar total after discounts.')
     inventory_view(svc)
 
 
@@ -328,7 +380,7 @@ def show_orders(svc: InventoryService) -> None:
 
 
 def orders_menu(svc: InventoryService, user: dict) -> None:
-    heading("Customer orders (S-7)")
+    heading("Customer orders")
     show_orders(svc)
     order_id = ask_id("Order ID (blank to return)", optional=True)
     if order_id is None:
@@ -344,7 +396,7 @@ def orders_menu(svc: InventoryService, user: dict) -> None:
 
 
 def alerts_menu(svc: InventoryService) -> None:
-    heading("Low-stock alerts (S-9)")
+    heading("Low-stock alerts")
     print("  An alert is raised when stock is BELOW the reorder level.")
     table(svc.alerts(), [("alertID", "Alert ID"), ("ingredientName", "Ingredient"),
                          ("quantityOnHand", "In stock"), ("reorderLevel", "Reorder at"),
@@ -361,7 +413,7 @@ def alerts_menu(svc: InventoryService) -> None:
 
 
 def purchase_create(svc: InventoryService) -> None:
-    heading("Create inventory purchase order (S-9)")
+    heading("Create inventory purchase order")
     active = svc.alerts()
     if active:
         table(active, [("ingredientID", "ID"), ("ingredientName", "Low-stock ingredient"),
@@ -405,7 +457,7 @@ def transaction_history(svc: InventoryService) -> None:
 
 
 def _owner_recheck(svc: InventoryService, user: dict) -> None:
-    """Ask for the current password before changing the database file."""
+    """Reverify the Owner before sensitive database-management actions."""
     password = getpass("Re-enter your account password to continue: ")
     check = svc.login(user["username"], password)
     if check["userID"] != user["userID"] or check["role"] != "Owner":
@@ -419,6 +471,68 @@ def _reset_confirmation() -> bool:
     return prompt("  Type RESET to confirm (anything else cancels)") == "RESET"
 
 
+def demo_data_menu(svc: InventoryService, user: dict) -> None:
+    """Load independent optional sample datasets without resetting stored records."""
+    while True:
+        heading('LOAD SAMPLE DATA | Owner only')
+        print('''
+   1. Starter shop: inventory, recipes, suppliers and sample orders (empty only)
+   2. Trend history: 12 days of orders, stock usage and ledger Sales
+      (requires option 1; includes a valued restock if stock is insufficient)
+   3. Accounting examples: 10 manual entries and a duplicate-reference example
+      (works with or without starter shop data)
+   4. Paid payroll example: employee hours, pay stubs and ledger Expense
+      (requires an active Employee with an hourly rate under 20 -> 7)
+   0. Back to Demo / Database Management (blank also returns)
+''')
+        choice = prompt('Select sample dataset')
+        if choice in ('', '0'):
+            return
+        if choice not in ('1', '2', '3', '4'):
+            print('  Invalid choice. Select 0–4.')
+            continue
+        warnings = {
+            '1': 'Adds 14 ingredients, 7 recipes, suppliers and 5 shop orders. '
+                 'Requires empty inventory; existing accounts remain.',
+            '2': 'Adds 12 historical dates of completed orders, deducts recipe stock and '
+                 'posts their actual Sales. Restocks and records a sample supplier '
+                 'invoice if needed. Existing real orders stay untouched.',
+            '3': 'Adds 10 fictional accounting records, including a repeated invoice '
+                 'reference for option 21 -> 5 reconciliation testing.',
+            '4': 'Creates an example payroll for up to 3 active rated Employees, marks '
+                 'it Paid and posts its expense. No real payments are sent.',
+        }
+        print('  ' + warnings[choice])
+        if not confirm('Load this sample dataset?'):
+            print('  Cancelled; no sample records added.')
+            input('\nPress Enter to continue...')
+            continue
+        try:
+            _owner_recheck(svc, user)
+            loaders = {
+                '1': lambda: svc.load_demo_data(user['userID']),
+                '2': lambda: populate_trend_history(svc, user['userID']),
+                '3': lambda: populate_accounting_activity(svc, user['userID']),
+                '4': lambda: populate_payroll_activity(svc, user['userID']),
+            }
+            summary = loaders[choice]()
+            print('  Sample records saved: ' + ', '.join(
+                f'{k.replace("_", " ")}: {v}' for k, v in summary.items()))
+            if choice == '1':
+                print('  Includes low stock, completed/pending orders and a partial delivery.')
+                inventory_view(svc)
+            elif choice == '2':
+                print('  Review the new results under option 22 for trends and 21 for Sales/Purchases.')
+            elif choice == '3':
+                print('  Use 21 -> 2 to view these entries and 21 -> 5 to find the sample duplicate.')
+            elif choice == '4':
+                print('  Use 20 to view the paid payroll and 21 to see its linked expense.')
+        except (InventoryError, sqlite3.Error, PayrollError, AccountingError) as exc:
+            print(f'  Sample data was not loaded: {exc}')
+            print('  No partial records from that dataset were saved.')
+        input('\nPress Enter to continue...')
+
+
 def demo_menu(svc: InventoryService, user: dict) -> bool:
     """Owner-only: return True if reset/restore requires a fresh login."""
     if user["role"] != "Owner":
@@ -426,7 +540,7 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
     while True:
         heading("DEMO / DATABASE MANAGEMENT (OWNER ONLY)")
         print('''
-   1. Populate an EMPTY inventory with realistic Onigiri shop demo data
+   1. Load sample data (shop, accounting, trends and payroll)
    2. Create a backup of the current database (no data changed)
    3. BACKUP + RESET entire database + load fresh demo data
       (keep existing login accounts)
@@ -441,11 +555,8 @@ def demo_menu(svc: InventoryService, user: dict) -> bool:
         if choice == "0":
             return False
         if choice == "1":
-            if confirm("Load 14 ingredients, 7 recipes, suppliers and sample orders?", True):
-                summary = svc.load_demo_data(user["userID"])
-                print("  Demo records saved:", ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in summary.items()))
-                print("  Includes low stock, completed and pending customer orders, and a partial delivery.")
-                inventory_view(svc)
+            demo_data_menu(svc, user)
+            continue
         elif choice == "7":
             print("  Import 8 fictional accounts: 1 Owner, 2 Employees, 5 Customers.")
             print("  Existing accounts and other business data will not be overwritten.")
@@ -684,6 +795,337 @@ def employees_menu(svc: InventoryService, user: dict) -> None:
             print(f'  Could not complete user management action: {exc}')
             if isinstance(exc, sqlite3.IntegrityError):
                 print('  This account is referenced elsewhere; consider disabling it instead.')
+
+def accounting_table(ledger: AccountingLedger) -> None:
+    heading("Accounting Transactions")
+    rows = ledger.getTransactions()
+    if not rows:
+        print("  No accounting transactions yet. Use option 3 to add one.")
+        return
+    table(rows, [
+        ("transactionID", "ID"), ("transactionDate", "Date"),
+        ("transactionType", "Type"), ("description", "Description"),
+        ("reference", "Reference"), ("amount", "Amount"), ("source", "Source"),
+    ])
+
+
+def accounting_summary(ledger: AccountingLedger) -> None:
+    dashboard = ledger.dashboard()
+    heading("Accounting Dashboard and Summary")
+    summary = dashboard["summary"]
+    print(f"  Total sales:          ${summary['totalSales']:,.2f}")
+    print(f"  Total purchases:      ${summary['totalPurchases']:,.2f}")
+    print(f"  Total expenses:       ${summary['totalExpenses']:,.2f}")
+    print(f"  Inventory adjustments: ${summary['totalAdjustments']:,.2f}")
+    print(f"  Balance (sales - purchases - expenses): ${summary['balance']:,.2f}")
+    print(f"  Flagged discrepancies: {len(dashboard['discrepancies'])}")
+    if not dashboard["transactions"]:
+        print("  No transactions have been recorded yet.")
+    if dashboard["discrepancies"]:
+        print("\n  Flagged items:")
+        table(dashboard["discrepancies"], [
+            ("discrepancyID", "ID"), ("transactionID", "Transaction"),
+            ("description", "Description"), ("amount", "Amount"), ("status", "Status"),
+        ])
+    print("\n  Recent accounting transactions:")
+    table(dashboard["transactions"][:10], [
+        ("transactionID", "ID"), ("transactionDate", "Date"),
+        ("transactionType", "Type"), ("description", "Description"),
+        ("reference", "Reference"), ("amount", "Amount"), ("source", "Source"),
+    ])
+    print("\n  Reconciliation log:")
+    table(dashboard["reconciliationLog"], [
+        ("reconciliationID", "Run ID"), ("reconciledAt", "Date/time"),
+        ("transactionCount", "Transactions"), ("flaggedCount", "Flagged"),
+        ("result", "Result"),
+    ])
+
+
+def accounting_entry_fields(existing: dict | None = None, *, requires_positive: bool = False) -> AccountingTransaction | None:
+    editing = existing is not None
+    existing = existing or {}
+    print("  Transaction types:")
+    for number, kind in enumerate(TRANSACTION_TYPES, 1):
+        print(f"    [{number}] {kind}")
+    while True:
+        if editing:
+            raw_type = prompt("Transaction type (number or name)", existing["transactionType"])
+        else:
+            raw_type = prompt("Transaction type (number or name; blank to cancel)")
+            if not raw_type:
+                return None
+        # Accept 1-4 or a case-insensitive name; always store the canonical value.
+        match = (TRANSACTION_TYPES[int(raw_type) - 1]
+                 if raw_type in {"1", "2", "3", "4"}
+                 else next((kind for kind in TRANSACTION_TYPES
+                            if kind.casefold() == raw_type.casefold()), None))
+        if match:
+            break
+        print("  Select 1-4 or enter a displayed transaction type name.")
+    transaction_date = prompt("Transaction date (YYYY-MM-DD)", existing.get("transactionDate", date.today().isoformat()))
+    description = prompt("Description", existing.get("description", ""))
+    reference = prompt("Reference / invoice number (optional)", existing.get("reference", ""))
+    amount = ask_number("Amount", allow_zero=not requires_positive,
+                        default=float(existing["amount"]) if editing else None)
+    return AccountingTransaction(
+        transactionID=existing.get("transactionID"),
+        transactionType=match,
+        transactionDate=transaction_date,
+        description=description,
+        reference=reference,
+        amount=amount,
+    )
+
+
+def accounting_add(ledger: AccountingLedger) -> None:
+    heading("Add Accounting Entry")
+    entry = accounting_entry_fields(requires_positive=ledger.legacy_payroll_schema)
+    if entry is None:
+        print("  Cancelled. Nothing was saved.")
+        return
+    entry.validateTransaction()
+    if not confirm(
+        f"Save {entry.transactionType} of ${entry.amount:,.2f} dated {entry.transactionDate}?",
+        True,
+    ):
+        print("  Cancelled. Nothing was saved.")
+        return
+    transaction_id = ledger.addTransaction(entry)
+    print(f"  Transaction #{transaction_id} saved to the Accounting Ledger.")
+    # Refresh the totals and duplicate-reference indicators after saving.
+    accounting_summary(ledger)
+
+
+def accounting_update(ledger: AccountingLedger) -> None:
+    heading("Update Accounting Entry")
+    rows = ledger.getTransactions()
+    if not rows:
+        print("  No entries to update. Add a transaction using option 3 first.")
+        return
+    accounting_table(ledger)
+    while True:
+        transaction_id = ask_id("Transaction ID to update (blank to return)", optional=True)
+        if transaction_id is None:
+            print("  Returning without changes.")
+            return
+        matching = next((row for row in rows if row["transactionID"] == transaction_id), None)
+        if matching:
+            break
+        print(f"  Transaction #{transaction_id} was not found. Choose an ID in the list or leave it blank.")
+    if matching.get('sourceType'):
+        print(f"  Transaction #{transaction_id} was posted by {matching['source']}. "
+              "Edit the originating order, payroll, or invoice workflow instead. "
+              "Automatically posted entries cannot be edited manually.")
+        return
+    entry = accounting_entry_fields(matching, requires_positive=ledger.legacy_payroll_schema)
+    if confirm(f"Save changes to transaction #{transaction_id}?", True):
+        ledger.updateTransaction(entry)
+        print("  Transaction updated.")
+        accounting_summary(ledger)
+    else:
+        print("  Cancelled. No changes were made.")
+
+
+def accounting_reconcile(ledger: AccountingLedger) -> None:
+    heading("Reconciliation Results")
+    result = ledger.reconcile_with_report()
+    print(f"  Transactions checked:           {result['transactionCount']}")
+    print(f"  Repeated-reference groups:      {result['duplicateReferenceGroups']}")
+    print(f"  New discrepancy flags:          {result['newFlags']}")
+    print(f"  Old flags cleared after fixes:  {result['clearedFlags']}")
+    print(f"  Flags still needing review:     {result['flaggedCount']}")
+    print(f"  Check saved as log #{result['reconciliationID']}.")
+    if result["transactionCount"] == 0:
+        print("  No accounting transactions to check yet. Nothing was flagged.")
+    elif result["newFlags"] == 0 and result["clearedFlags"] == 0:
+        print("  No new issues were found and no existing flags needed clearing.")
+    if result["flaggedCount"]:
+        print("  Review outstanding flags using option 6; they do not block saving transactions.")
+
+
+def accounting_review_discrepancies(ledger: AccountingLedger) -> None:
+    heading("Review Flagged Discrepancies")
+    ledger.reconcile()
+    while True:
+        flagged = ledger.getDiscrepancies("Flagged")
+        if not flagged:
+            print("  No flagged discrepancies to resolve. Use option 5 to check the ledger.")
+            return
+        table(flagged, [
+            ("discrepancyID", "ID"), ("transactionID", "Transaction"),
+            ("description", "Description"), ("amount", "Amount"), ("status", "Status"),
+        ])
+        discrepancy_id = ask_id("Discrepancy ID to resolve (blank to return)", optional=True)
+        if discrepancy_id is None:
+            return
+        if not any(row["discrepancyID"] == discrepancy_id for row in flagged):
+            print(f"  Flag #{discrepancy_id} is not open. Choose an ID displayed above or leave blank.")
+            continue
+        if confirm(f"Mark discrepancy #{discrepancy_id} as resolved?"):
+            ledger.resolveDiscrepancy(discrepancy_id)
+            print(f"  Discrepancy #{discrepancy_id} marked Resolved. The transaction itself was not changed.")
+        else:
+            print("  No change made.")
+
+
+def accounting_entry_help() -> None:
+    heading("Accounting Transaction Entry Help")
+    print("""
+  A transaction is one financial event recorded in the shop's ledger.
+
+  1. Transaction type (required)
+     [1] Sale                 Money received from a customer.
+     [2] Purchase             Ingredients or supplies bought for the shop.
+     [3] Expense              Other costs, such as rent or packaging.
+     [4] Inventory Adjustment A value recorded for an inventory correction.
+     You can enter either its number (1-4) or name, ignoring case.
+     Blank at the beginning of a NEW entry cancels without saving.
+
+  2. Transaction date (required)
+     Enter YYYY-MM-DD, for example 2026-10-15. Future dates are rejected.
+
+  3. Description (required)
+     Give a short, meaningful explanation. Example: "October rice purchase".
+
+  4. Reference / invoice number (optional but recommended)
+     Use the receipt, invoice, or internal reference number. Reusing the same
+     non-empty reference on multiple transactions triggers a discrepancy flag
+     so the Owner can review it; it is not automatically deleted.
+
+  5. Amount (required)
+     Enter a number such as 125 or 125.50. Negative values and non-numbers
+     are rejected. Inventory adjustments are shown separately in the summary.
+     On a database originally created by payroll, amounts must be above zero.
+
+  Reconciliation (option 5)
+     Checks ledger entries for reused non-empty references, records new flags,
+     clears outdated flags after a duplicate is corrected, and logs the check.
+     It does NOT compare to bank statements or automatically fix transactions.
+     Option 6 lets the Owner review and manually resolve flagged items.
+
+  Leaving an option
+     Options 4 and 6 accept a blank ID to return. A result stays on screen
+     until you press Enter to go back to the Accounting Ledger menu.
+
+  Historical transactions (option 8)
+     Lists previously completed shop orders not yet linked to a Sale entry.
+     Review each one before importing if manual sales already exist, to avoid
+     counting the same revenue twice. Leave the Order ID blank to return.
+
+  Automatic postings
+     Completed orders post a Sale (net of loyalty discounts); paid payrolls
+     post an Expense; supplier deliveries post a Purchase when an invoice amount
+     is entered. Quantity-only stock changes carry no accounting dollar value.
+     Linked automatic entries are read-only here to protect source records.
+     No fictional financial entries are added automatically on first use.
+""")
+
+
+def accounting_sync_historical(ledger: AccountingLedger) -> None:
+    heading('Review Historical Order Sales')
+    pending = ledger.pending_completed_orders()
+    if not pending:
+        print('  All qualifying completed orders are already linked to accounting, '
+              'or have a zero-dollar net total. Nothing to import.')
+        return
+    print('  These completed orders have no source-linked Sale entry:')
+    table(pending, [('orderID', 'Order ID'), ('orderDate', 'Date'),
+                    ('totalAmount', 'Original total'), ('paidAmount', 'Net Sale')])
+    manual = ledger.manual_sale_count()
+    if manual:
+        print(f'  WARNING: There are {manual} manual Sale entries already in the ledger.')
+        print('  Some may represent these same orders. Review each order against the '
+              'manual entries before importing to avoid counting revenue twice.')
+    print('  Select individual Order IDs to link; leave the ID blank when finished.')
+    while True:
+        order_id = ask_id('Completed Order ID to import (blank to return)', optional=True)
+        if order_id is None:
+            return
+        match = next((row for row in pending if row['orderID'] == order_id), None)
+        if match is None:
+            print('  That order is not in the pending list. Choose an ID shown above or leave blank.')
+            continue
+        if not confirm(f"Post order #{order_id} as a Sale of ${match['paidAmount']:,.2f}?", False):
+            print('  Skipped; no entry created.')
+            continue
+        count = ledger.sync_completed_orders(allow_with_manual_sales=True, order_ids={order_id})
+        print('  Sale posted.' if count else '  No new Sale was necessary.')
+        pending = [row for row in pending if row['orderID'] != order_id]
+        if not pending:
+            print('  All listed orders have now been reviewed.')
+            return
+
+
+def accounting_menu(user: dict, db_path=None) -> None:
+    if user.get("role") != "Owner":
+        print("  Accounting is available to Owners only.")
+        return
+    try:
+        ledger = AccountingLedger(db_path)
+        imported = ledger.sync_completed_orders()
+    except (AccountingError, sqlite3.Error, OSError) as exc:
+        print(f"  Could not open the Accounting Ledger: {exc}")
+        print("  Check that the database file is accessible and compatible.")
+        return
+    if imported:
+        print(f"  Added {imported} previously completed order sales to the ledger. "
+              "Existing financial entries were preserved.")
+    elif ledger.manual_sale_count() and ledger.pending_completed_orders():
+        print('  Historical completed orders were not imported automatically because '
+              'manual Sale entries already exist. Use accounting option 8 to '
+              'review and import individual orders without double-counting.')
+    amount_rule = ("greater than 0 (payroll-format database)"
+                   if ledger.legacy_payroll_schema else ">= 0")
+    while True:
+        heading("Accounting Ledger")
+        print(f"""
+   1. Open accounting summary / dashboard
+   2. View all accounting transactions
+   3. Add a new accounting transaction
+   4. Update an existing transaction
+   5. Reconcile ledger / check discrepancies
+   6. Review or resolve flagged discrepancies
+   7. Transaction entry help
+   8. Review/import historical completed order sales
+   0. Return to main menu
+
+   Completed orders and paid payrolls post automatically. Supplier deliveries
+   post Purchases when an invoice amount is supplied (main menu option 5).
+
+   Required for a new transaction:
+     - Type: [1] Sale, [2] Purchase, [3] Expense, [4] Inventory Adjustment
+     - Date: YYYY-MM-DD; cannot be a future date
+     - Description: required, e.g. "Rice and nori purchase"
+     - Amount: numeric amount {amount_rule} (dollars, e.g. 125.50)
+     - Reference/invoice number: optional, but duplicate references are flagged
+""")
+        selection = prompt("Select an option")
+        if selection == "0":
+            return
+        actions = {
+            "1": lambda: accounting_summary(ledger),
+            "2": lambda: accounting_table(ledger),
+            "3": lambda: accounting_add(ledger),
+            "4": lambda: accounting_update(ledger),
+            "5": lambda: accounting_reconcile(ledger),
+            "6": lambda: accounting_review_discrepancies(ledger),
+            "7": lambda: accounting_entry_help(),
+            "8": lambda: accounting_sync_historical(ledger),
+        }
+        action = actions.get(selection)
+        if action is None:
+            print("  Invalid selection. Choose 0-8 from the Accounting Ledger menu.")
+            input("\nPress Enter to return to the Accounting Ledger menu...")
+            continue
+        try:
+            action()
+        except AccountingError as exc:
+            print(f"  Not saved: {exc}")
+        except (sqlite3.Error, OSError) as exc:
+            print(f"  Database action could not be completed: {exc}")
+            print("  Check that the database is writable and its tables are compatible.")
+        input("\nPress Enter to return to the Accounting Ledger menu...")
+
 
 def loyalty_customer_menu(svc: LoyaltyService, user: dict) -> None:
     """Allow a customer to access only their own loyalty account."""
@@ -1130,17 +1572,18 @@ def menu(svc: InventoryService, user: dict) -> None:
             continue
         heading(f"ONIGIRI SHOP | Management System | {user['name']} ({user['role']})")
         print('''
-   1. View inventory                  11. Create inventory purchase order
-   2. Add ingredient                  12. View inventory purchase orders
-   3. Set reorder level               13. View transaction history
-   4. Manually adjust inventory       14. Manage suppliers
-   5. Receive supplier delivery       15. Manage users (Owner)
-   6. Create/edit recipe              16. Demo / backup / reset (Owner)
-   7. View recipes                    17. Log out
-   8. Create customer order           18. My Profile
-   9. View/complete customer orders   19. Loyalty Program
-  10. Review low-stock alerts         20. Payroll (Owner)
-                                      0. Exit
+   1. View inventory                   12. View inventory purchase orders
+   2. Add ingredient                   13. View transaction history
+   3. Set reorder level                14. Manage suppliers
+   4. Manually adjust inventory        15. Manage users (Owner)
+   5. Receive supplier delivery        16. Demo / backup / reset (Owner)
+   6. Create/edit recipe               17. Log out
+   7. View recipes                     18. My Profile
+   8. Create customer order            19. Loyalty Program
+   9. View/complete customer orders    20. Payroll (Owner)
+  10. Review low-stock alerts          21. Accounting Ledger (Owner)
+  11. Create inventory purchase order  22. Trend Predicting Dashboard
+                                        0. Exit
 ''')
         selection = prompt("Select an option")
         if selection == "0":
@@ -1168,6 +1611,8 @@ def menu(svc: InventoryService, user: dict) -> None:
             "18": lambda: profile_menu(ProfileService(svc.db_path), user),
             "19": lambda: loyalty_staff_menu(LoyaltyService(svc.db_path), user),
             "20": lambda: payroll_menu(svc, user),
+            "21": lambda: accounting_menu(user, svc.db_path),
+            "22": lambda: TrendPredictingDashboard(svc.db_path).run(),
         }
         action = actions.get(selection)
         if not action:
@@ -1177,7 +1622,7 @@ def menu(svc: InventoryService, user: dict) -> None:
             needs_login = action()
             if needs_login is True:
                 return
-        except (InventoryError, ProfileError, LoyaltyError, PayrollError,
+        except (InventoryError, ProfileError, LoyaltyError, PayrollError, AccountingError,
                 sqlite3.Error, OSError) as exc:
             print(f"\n  Not saved: {exc}")
             if isinstance(exc, sqlite3.Error):
