@@ -1,16 +1,12 @@
 # The Onigiri Shop — Management System
 
-This Python application is a menu-driven management system for The Onigiri Shop. It manages ingredients, recipes, orders, inventory deductions, low-stock alerts, suppliers and purchasing, customer/employee accounts, self-service profiles, loyalty points and rewards, employee payroll, a shared Accounting Ledger, and sales/inventory/revenue trend predictions, plus customer feedback submission and staff review. Owners can optionally load separate test datasets for inventory, accounting, trends and payroll.
+This Python application provides desktop and command-line interfaces for The Onigiri Shop management system. It manages ingredients, recipes, orders, inventory deductions, low-stock alerts, suppliers and purchasing, customer/employee accounts, self-service profiles, loyalty points and rewards, employee payroll, a shared Accounting Ledger, and sales/inventory/revenue trend predictions, plus customer feedback submission and staff review. Owners can optionally load separate test datasets for inventory, accounting, trends and payroll.
 
-**The database is persistent.** Data is stored in a local SQLite file named `btm495.db` (the existing filename is retained so older installations keep working). The application creates that file **only if it does not already exist**. On subsequent launches, it reads and updates the same file; it does not wipe the database on startup. You do **not** need to run the original `database.py` or `main.py` to use this application.
+For the built Windows application, use its desktop shortcut or **`TheOnigiriShop.exe`**. To run the desktop interface from source, use **`Tools/START_DESKTOP.bat`** (Windows) or **`python Source/desktop_app.py`**. See [Desktop interface](#13-desktop-interface) for setup, navigation and workflows. The numbered menus below describe the CLI.
+
+**The database is persistent.** Source launches use `Data/btm495.db` in the application folder (the existing filename is retained so older installations keep working). The application creates that file **only if it does not already exist**. On subsequent launches, it reads and updates the same file; it does not wipe the database on startup.
 
 > **Important:** The reset and restore options *do* replace the active database, but only when an Owner selects and confirms those actions. Every reset creates a backup first. If other applications or modules share this SQLite file, read [Section 8](#8-sample-data-backups-resets-and-restore) before performing a reset.
-
----
-
-## Optional sample users and profiles — only through option 21
-
-The ZIP starts **without a preloaded user database**. The first run prompts you to create **your own Owner account**. **No fictional users are loaded automatically on startup.** To add eight fictional accounts, sign in as Owner and select **21 → 7 — Load 8 fictional sample users and profiles**. Confirm the action and verify your Owner password. The loader preserves existing users, inventory and orders. It skips already-imported accounts on later runs, even if their details were edited. The sample-user loader **does not auto-enroll sample customers or create loyalty transactions**; customers enroll through option 5. The optional usernames and passwords are documented in [Section 8](#8-sample-data-backups-resets-and-restore).
 
 ---
 
@@ -42,16 +38,20 @@ via **21 → 7** remains optional and independent. Returning to option 5 does
 not duplicate sample rewards or re-enable rewards an Owner deactivated. Owners
 can add other rewards under **5 → 7**. Reward point costs and discounts are
 configurable sample values, not legal or externally mandated amounts. Earning
-now defaults to **10 points per $1 CAD of eligible spending**, with whole points rounded down. For example, $10 earns 100 points and $100 earns 1,000 points; the $5 discount is therefore an illustrative **5% effective reward rate**. Any previous active sample reward with the exact old name, cost and discount is updated in place the next time option 5 opens. Modified and deactivated rewards remain untouched; existing loyalty balances and transaction history are not recalculated.
+defaults to **10 points per $1 CAD of eligible spending**, with whole points rounded down. For example, $10 earns 100 points and $100 earns 1,000 points; the $5 discount is therefore an illustrative **5% effective reward rate**. Customized and deactivated rewards are preserved; existing balances and transaction history are not recalculated.
 
 ## 1. Requirements
 
+The bundled Windows executable includes Python and Matplotlib; no separate installation
+is needed. See [Windows executable and desktop shortcut](#windows-executable-and-desktop-shortcut).
+The requirements below apply when running from source.
+
 - **Python 3.10 or later**, installed on your computer.
-- Windows, macOS or Linux. The supplied `START_HERE.bat` launcher works **on Windows only**; other systems can run the Python command below.
+- Windows, macOS or Linux. The supplied `Tools/START_HERE.bat` launcher works **on Windows only**; other systems can run the Python command below.
 - A terminal or Command Prompt (Windows Terminal, Command Prompt, PowerShell, or the VS Code terminal).
 - Permission to create files in the application folder.
 
-The main application uses Python's standard library, including `sqlite3`. **Matplotlib is required only for the pop-up graphs in option 19.** If it is not installed, the numerical forecasts and every other menu still work. To enable graphs, install Matplotlib once in the **same Python environment** you use to launch the application:
+The application uses Python's standard library, including `sqlite3`. The optional desktop interface also needs Tkinter/Tcl/Tk, normally included with the standard Windows Python installer. The CLI does not import or require Tkinter. **Matplotlib is required only for graphs in CLI option 19 or desktop Trends (embedded in the page).** If it is not installed, the numerical forecasts and every other menu still work. To enable graphs, install Matplotlib once in the **same Python environment** you use to launch the application:
 
 Windows:
 
@@ -80,7 +80,7 @@ If that command is not recognized, try `python --version`. On macOS or Linux, us
 ### Windows — launcher
 
 1. Clone or download the repository, or extract all application files to a permanent folder such as `Documents\OnigiriInventory`.
-2. Open the extracted folder and double-click **`START_HERE.bat`**.
+2. Open the extracted folder and double-click **`Tools/START_HERE.bat`**.
 3. A command window will open, initialize or connect to the database, and display the setup/login screen.
 4. Follow the on-screen prompts. When you finish, choose **`0 — Exit`**.
 
@@ -89,20 +89,20 @@ If that command is not recognized, try `python --version`. On macOS or Linux, us
 Open Command Prompt or the VS Code terminal in the extracted folder, then run:
 
 ```bat
-py inventory_cli.py
+py Source/inventory_cli.py
 ```
 
 Alternatively:
 
 ```bat
-python inventory_cli.py
+python Source/inventory_cli.py
 ```
 
 You can also navigate to the folder yourself; use quotation marks around a path containing spaces:
 
 ```bat
 cd "%USERPROFILE%\Documents\OnigiriInventory"
-py inventory_cli.py
+py Source/inventory_cli.py
 ```
 
 ### macOS / Linux
@@ -110,45 +110,49 @@ py inventory_cli.py
 Open a terminal, navigate to the extracted folder, and run:
 
 ```bash
-python3 inventory_cli.py
+python3 Source/inventory_cli.py
 ```
 
-**Tip:** Keep all application `.py` files together in the same folder. Running `inventory_cli.py` alone without its companion files will produce a module import error.
+**Tip:** Keep all application `.py` files together in `Source/`, with the other project folders intact. Running `inventory_cli.py` alone without its companion files will produce a module import error.
 
-### Files included
+### Application files
 
-| File | Purpose | Edit it for ordinary use? |
-|---|---|---|
-| `inventory_cli.py` | Main menu, login prompts, input and output | No |
-| `inventory_service.py` | Business rules: inventory, recipes, orders, deliveries, alerts, shared login accounts | No |
-| `profile_service.py` | Profile model, validation, viewing and atomic updates | No |
-| `feedback_service.py` | Validated customer submissions, feedback history and staff review permissions | No |
-| `user_management_service.py` | Owner-only management of shared User accounts, roles, credentials and activation | No |
-| `inventory_db.py` | SQLite database connection, tables and compatible schema additions | No |
-| `demo_tools.py` | Sample Onigiri data; backup, reset and restore actions | No |
-| `sample_users.py` | **Optional** fictional user + profile import, only through Owner option 21 → 7 | No |
-| `loyalty_service.py`, `loyalty_models.py` | Loyalty accounts, rewards, earned points and redemptions | No |
-| `payroll_service.py`, `payroll.py` | Owner-only payroll workflow, calculations, pay stubs and expense recording | No |
-| `accounting_service.py` | Shared financial ledger, automatic source-linked postings, summaries and discrepancy checks | No |
-| `trend_prediction_service.py` | Read-only sales, ingredient consumption and net order-revenue estimates with optional Matplotlib pop-up charts | No |
-| `test_payroll.py`, `test_integrated_system.py` | Payroll and cross-feature regression tests | Optional |
-| `test_accounting.py`, `test_accounting_integration.py` | Ledger, legacy database and cross-module financial posting tests | Optional |
-| `test_trend_prediction.py` | Forecast calculations, loyalty-aware revenue, empty-data screens and menu integration tests | Optional |
-| `test_demo_datasets.py` | Optional sample-data imports, duplicate prevention, audit trail and forecast regression tests | Optional |
-| `test_loyalty.py`, `test_loyalty_diagrams.py`, `test_loyalty_profile_integration.py` | Loyalty, domain-model and combined profile tests | Optional |
-| `test_sample_users.py` | Tests for optional import, permissions and safe repetition | Optional |
-| `START_HERE.bat` | Windows double-click launcher | No |
-| `README.md` | This setup and menu guide | Read this |
-| `test_inventory.py` | Automated inventory feature tests | Optional |
-| `test_demo_tools.py` | Automated sample data, backup and reset tests | Optional |
-| `test_profile.py` | Profile role, validation, persistence, cancellation and rollback tests | Optional |
-| `test_user_management.py` | Tests for Owner-only management, safe deletion, password resets and role changes | Optional |
-| `test_feedback.py` | Feedback tests for permissions, input, cancel/back navigation, account integration, and storage failures | Optional |
-| `test_main_menu_navigation.py` | Checks the grouped menu, every management option, Customer access and logout navigation | Optional |
-| `btm495.db` | **Your saved database, created automatically on first run** | **Keep it** |
-| `backups/` | Dated database backups, created when needed | **Keep it** |
+```text
+TheOnigiriShop-main/
+    TheOnigiriShop.exe          Windows application
+    README.md                  Setup and usage
+    Source/                    All Python application modules
+        Assets/onigiri.ico     Desktop and executable icon
+    Data/                      Persistent databases, including personal copies
+        btm495.db              Default shared restaurant database
+    Backups/                   Backups for databases in this project's Data folder
+    Build/                     Generated executable build files
+    Test Cases/                Automated tests
+    Tools/                     Windows launchers, test runner and build configuration
+```
 
-The `.db` file and the `backups/` folder are not bundled with the downloadable code. They are generated on your own computer when you use the application. To update an existing installation, replace its `.py` source files and README while **retaining your existing `btm495.db` and `backups/` folder**. See the database-migration instructions below.
+| Files | Purpose |
+|---|---|
+| `Source/inventory_cli.py`, `Tools/START_HERE.bat` | CLI entry point and Windows launcher |
+| `Source/desktop_app.py`, `Tools/START_DESKTOP.bat` | Desktop interface and launcher |
+| `Source/desktop_widgets.py`, `Source/appearance_preferences.py`, `Source/windows_icons.py`, `Source/Assets/onigiri.ico` | Desktop controls, colour schemes, preferences and icons |
+| `Source/desktop_details_service.py`, `Source/desktop_demo_service.py` | Record detail views and the complete demo workflow |
+| `Source/inventory_service.py`, `Source/inventory_db.py` | Shared inventory/order rules, connections and compatible schema initialization |
+| `Source/profile_service.py`, `Source/user_management_service.py` | Profiles and account management |
+| `Source/loyalty_service.py`, `Source/loyalty_models.py` | Loyalty accounts, rewards and order discounts |
+| `Source/payroll_service.py`, `Source/payroll.py` | Payroll persistence and calculations |
+| `Source/accounting_service.py` | Shared ledger, source links and reconciliation |
+| `Source/trend_prediction_service.py`, `Source/feedback_service.py` | Historical forecasts and customer feedback |
+| `Source/demo_tools.py`, `Source/demo_timestamps.py`, `Source/sample_users.py` | Optional sample data, fictional event times, backups, resets and restores |
+| `Source/application_paths.py`, `Source/windows_launcher.py`, `Tools/CREATE_DESKTOP_SHORTCUT.bat` | Shared paths, executable startup, database selection and shortcut creation |
+| `Tools/TheOnigiriShop.spec`, `Source/build_safety.py`, `Tools/BUILD_WINDOWS_EXE.bat` | Executable build configuration and protection against replacing a running build |
+| `Test Cases/`, `Tools/RUN_TESTS.bat` | Automated tests and Windows test runner |
+| `TheOnigiriShop.exe` | Built Windows application, directly in the main folder |
+| `Data/`, `Backups/` | Persistent restaurant databases and backups: preserve these when updating |
+
+Source distributions exclude live databases, backups and generated build caches.
+On an existing installation, preserve all database files (including any personal
+copies) and the backups folder when updating the application.
 
 ## 3. First-time setup and login
 
@@ -180,11 +184,11 @@ Enter `exit` at the username prompt to close the application without signing in.
 
 The Owner's **3 — Edit user information** option supports the same profile information: name, username, email, phone number and date of birth. Role changes and password resets are handled separately. All signed-in Owners, Employees and Customers (including imported sample users) can use **22 — My Profile** to add, edit, or clear their email address, edit their name, phone number, and date of birth. Username and role remain read-only here; the Owner can edit usernames through option 20.
 
-Owners and Employees can use the original inventory and ordering menus. Customers can sign in and view/update **their own profile and loyalty history**, and submit/view **their own feedback**; inventory administration is unavailable to Customers. Only an **Owner** can manage all users in option 20 or open **21 — Demo / backup / reset**. Staff can register new loyalty customers through option 5 → 1. Be careful when adding another Owner: that person can also reset and restore the database.
+Owners and Employees can use the inventory and ordering menus. Customers can sign in and view/update **their own profile and loyalty history**, and submit/view **their own feedback**; inventory administration is unavailable to Customers. Only an **Owner** can manage all users in option 20 or open **21 — Demo / backup / reset**. Staff can register new loyalty customers through option 5 → 1. Be careful when adding another Owner: that person can also reset and restore the database.
 
 Only Owners can run payroll through **17 — Payroll**. Employee accounts must exist (option **20 → 2**) and have an hourly rate (option **17 → 7**) before their payroll can be calculated. Payroll is a simplified local recordkeeping workflow; it does not transfer money to employees or submit statutory filings.
 
-> Owners can now reset an account password or disable and reactivate logins without destroying the account history. When a disabled user enters their correct password, the login screen tells them their account is disabled and to contact an Owner. Account removal is only possible when the user has no related business records.
+> Owners can reset an account password or disable and reactivate logins without destroying the account history. When an inactive user enters their correct password, the login screen tells them their account is inactive and to contact an Owner. Account removal is only possible when the user has no related business records.
 
 ## 4. Main menu reference
 
@@ -192,7 +196,7 @@ After a successful login, the menu stays open in a loop. Type an option number a
 
 | Option | Menu name | What it does |
 |---|---|---|
-| **1** | Create customer order | Selects recipes, servings and an optional Customer ID, saves a Pending order, and optionally completes it with stock and loyalty updates. |
+| **1** | Create customer order | Selects recipes, servings and an optional Customer User ID, saves a Pending order, and optionally completes it with stock and loyalty updates. |
 | **2** | View/complete customer orders | Reviews orders and linked Customer IDs, completes a Pending order with stock/loyalty updates, or cancels one. |
 | **3** | Create/edit recipe | Creates a menu recipe and defines or changes the ingredients required per serving. |
 | **4** | View recipes | Lists recipes and lets you inspect a recipe's ingredients. |
@@ -292,15 +296,15 @@ To edit a recipe, choose **3**, answer **No** when asked to create a new recipe,
 
 1. Choose **1 — Create customer order**.
 2. Select one or more **recipe IDs** and enter a whole-number serving count for each.
-3. Leave the recipe ID blank to finish. Enter the **Customer ID** if the customer wants loyalty points (or leave it blank). Use **5 → 9** to list customers and their IDs; **5 → 1** creates a new walk-in customer, and **5 → 2** enrolls an existing Customer user.
+3. Leave the recipe ID blank to finish. Enter the **Customer User ID** if the customer wants loyalty points (or leave it blank). Use **5 → 9** to list customers and their IDs; **5 → 1** creates a new walk-in customer, and **5 → 2** enrolls an existing Customer user.
 4. Confirm **Save as Pending**, then choose whether to **mark the order Completed now**.
    - **Yes:** the system checks the linked customer's loyalty status, offers available discounts, previews earned/redeemed points and asks for final confirmation. Completing checks inventory, deducts required ingredients, updates the order and records loyalty points together.
    - **No:** the order stays Pending; no ingredients or points are deducted yet. The Customer ID is retained.
 5. To complete it later, choose **2**, select the order ID, enter `c` and follow the **same loyalty/discount prompts**. For an order with no Customer ID, staff can assign one before finishing.
 
-If a customer has not joined loyalty yet, the completion menu **offers to enroll them** first. If loyalty is suspended, the customer account is disabled, or the order has no customer attached, the program explains what must be activated or linked and can complete the order **without loyalty points** after explicit confirmation. A cancelled or still-Pending order earns no points. A Completed order cannot be completed again, so stock and points cannot be double-counted.
+If a customer has not joined loyalty yet, the completion menu **offers to enroll them** first. If loyalty is suspended, the customer account is inactive, or the order has no customer attached, the program explains what must be activated or linked and can complete the order **without loyalty points** after explicit confirmation. A cancelled or still-Pending order earns no points. A Completed order cannot be completed again, so stock and points cannot be double-counted.
 
-If stock is insufficient or the selected reward is invalid, the completion stops and the order remains Pending. Inventory deduction, order status, loyalty writes (when applicable), and the **net Sale posting** are committed in **one database transaction**; a failure rolls everything back. The original order total remains unchanged, but accounting records its value after any reward discount. No money is charged or refunded by this program; real payment processing would be integrated separately.
+If stock is insufficient or the selected reward is invalid, the completion stops and the order remains Pending. Inventory deduction, order status, loyalty writes (when applicable), and the **net Sale posting** are committed in **one database transaction**; a failure rolls everything back. The original order total remains unchanged, but accounting records its value after any reward discount. No money is charged or refunded by this program; real payments are handled outside the application.
 
 If the order requires more of **any** ingredient than you have available, the completion is rejected. **Nothing is deducted and the order remains Pending**; this prevents a partly fulfilled inventory update. An order that has already been completed cannot be completed again, preventing a duplicate deduction.
 
@@ -344,7 +348,7 @@ Use **13 — View inventory purchase orders** to see each purchase order and its
 
 Use **16 — View transaction history** to review the **40 most recent** inventory movements, newest first. Adding stock records a positive change; deductions record a negative change. Transaction types include Opening Stock, Manual Adjustment, Supplier Delivery and Customer Order.
 
-**Manual stock adjustments (option 9):** Supply a quantity and reason as before. An optional positive CAD value can now be recorded as an **Inventory Adjustment** in the Accounting Ledger at the same time. If no value is entered, only the stock movement is recorded. Accounting adjustments are displayed separately and do not automatically change the sales-minus-expenses balance because the system does not infer an adjustment's debit/credit direction.
+**Manual stock adjustments (option 9):** Supply a quantity and reason. An optional positive CAD value can be recorded as an **Inventory Adjustment** in the Accounting Ledger at the same time. If no value is entered, only the stock movement is recorded. Accounting adjustments are displayed separately and do not automatically change the sales-minus-expenses balance because the system does not infer an adjustment's debit/credit direction.
 
 ## Owner account management (option 20)
 
@@ -365,7 +369,7 @@ The user list and individual account details show a **Customer ID** column. It d
 
 **Important:** The account-management service checks the Owner role against the *current database* every time; even a direct call by an Employee/Customer is denied. Do not disable your only Owner account. If a user has linked business records, disable their account instead of deleting it. Other team modules should use the same `User.userID` identity rather than creating a second user database.
 
-For existing installations, update the Python files **inside your existing application folder** but retain `btm495.db` and `backups/`. On the next start, the program adds any missing profile, loyalty, payroll and accounting tables or supporting columns without removing existing users, profiles, orders or other saved records. If you unzip to a different folder, a separate empty database will be created there unless you move your existing `btm495.db` into that folder.
+For existing installations, update the Python files in **`Source/`** but retain **`Data/` and `Backups/`**. On the next start, the program adds any missing profile, loyalty, payroll and accounting tables or supporting columns without removing existing users, profiles, orders or other saved records. Source launches from another extracted copy use that copy's `Data/btm495.db`; confirm the intended data location before launching.
 
 ---
 
@@ -380,9 +384,9 @@ This menu always displays the signed-in user's profile and optionally lets them 
 5. The system validates the proposed values. It requires a nonempty name, checks email and phone number syntax, and prevents impossible or future birth dates. Invalid entries display an error and invite correction. You can decline to save and discard all pending edits.
 6. Confirm **Save** to write changes atomically to the existing SQLite database. The updated name and email also appear in the shared `User` table, with name displayed in the menu after successful saving. A save failure rolls back all pending changes.
 
-**Customers** see a limited menu (`5 — My Loyalty`, `6 — Feedback System`, `22 — My Profile`, `23 — Log out`, `0 — Exit`). They do not receive the stock/order administration menu. The application currently trusts the user ID returned by its existing login service; any future web/API integration must identify the user from an authenticated session and must not accept an arbitrary user ID from the client.
+**Customers** see a limited menu (`5 — My Loyalty`, `6 — Feedback System`, `22 — My Profile`, `23 — Log out`, `0 — Exit`). They do not receive the stock/order administration menu. The application currently trusts the user ID returned by its existing login service; integrations must identify the user from an authenticated session and must not accept an arbitrary user ID from the client.
 
-**For developers:** `ProfileService(db_path).view_profile(current_user_id)` returns an immutable `Profile` object. `update_profile(current_user_id, {'name': ..., 'email': ..., 'phoneNumber': ..., 'dateOfBirth': ...}, expected_version=profile.version)` validates and commits the user's data. Profile IDs are stable strings. Future modules should reuse the same `User.userID` and `Profile` row. Loyalty points, payroll data and authentication credentials cannot be edited through My Profile.
+**For developers:** `ProfileService(db_path).view_profile(current_user_id)` returns an immutable `Profile` object. `update_profile(current_user_id, {'name': ..., 'email': ..., 'phoneNumber': ..., 'dateOfBirth': ...}, expected_version=profile.version)` validates and commits the user's data. Profile IDs are stable strings. Modules should reuse the same `User.userID` and `Profile` row. Loyalty points, payroll data and authentication credentials cannot be edited through My Profile.
 
 ---
 
@@ -395,8 +399,8 @@ Owners and Employees have the following staff submenu. Customers see **5 — My 
 | **1** | Register a walk-in customer | Enter a name, email or phone number (at least one contact method required), optional date of birth, optional username and optional password (8+ characters). A blank username generates `walkin<UserID>`; a blank password generates a **unique random temporary password**, shown once. The created customer can sign in immediately. Give the credentials privately to the customer. |
 | **2** | Enroll an existing Customer user | Enter the **User ID**, not Customer ID. A blank ID returns to the loyalty submenu. Already-enrolled Customers keep their existing account and points. |
 | **3** | Find by email/phone | Search exact contact information; shows both IDs and whether points exist. |
-| **4** | View loyalty details | Enter the **Customer ID** to see balance, available rewards and transaction history. |
-| **5** | Record a completed order manually | For an older Completed order not already in the loyalty ledger, enter Customer ID and Order ID, preview any redemption, confirm and record points once. **Not needed for orders completed through main menu options 1/2 with active loyalty.** |
+| **4** | View loyalty details | Enter the **Customer User ID** to see balance, available rewards and transaction history. |
+| **5** | Record a completed order manually | For an older Completed order not already in the loyalty ledger, enter Customer User ID and Order ID, preview any redemption, confirm and record points once. **Not needed for orders completed through main menu options 1/2 with active loyalty.** |
 | **6** | List rewards | Shows all rewards and whether they are active. |
 | **7** | Configure rewards (Owner) | Create rewards or activate/deactivate existing ones. |
 | **8** | Suspend/reactivate loyalty (Owner) | Changes loyalty status without removing historical transactions; suspended accounts cannot earn/redeem. |
@@ -406,21 +410,21 @@ Owners and Employees have the following staff submenu. Customers see **5 — My 
 ### Which ID should I enter?
 
 - **User ID** identifies a login account, whether Owner, Employee or Customer. Staff use it with **5 → 2** to enroll an existing Customer user.
-- **Customer ID** identifies the Customer record used by `Order.customerID` and the loyalty program. Staff use it for order creation/completion and **5 → 4/5/8**. It is not interchangeable with User ID; they may have different numbers.
+- **Customer ID** identifies the Customer record used by `Order.customerID` and the loyalty program. Forms accept the Customer User ID and translate it to the stored Customer ID. It is not interchangeable with User ID; they may have different numbers.
 - **Loyalty transaction ID** identifies one completed purchase's point activity. Only one loyalty transaction is permitted per order.
 
 ### How loyalty is recorded when an order completes
 
-1. Staff link the Customer ID to the order using main menu **1**, or when completing an existing Pending order under main menu **2**.
-2. If the Customer does not yet have a loyalty account, the menu offers to enroll them. A disabled Customer login must be re-enabled under **20 → 6**, and a suspended loyalty account must be reactivated under **5 → 8** before loyalty can be applied. Staff may instead explicitly proceed without points.
+1. Staff enter the Customer User ID to link the order using main menu **1**, or when completing an existing Pending order under main menu **2**.
+2. If the Customer does not yet have a loyalty account, the menu offers to enroll them. An inactive Customer login must be re-enabled under **20 → 6**, and a suspended loyalty account must be reactivated under **5 → 8** before loyalty can be applied. Staff may instead explicitly proceed without points.
 3. The program checks active rewards the customer can afford **with their existing points**, excluding discounts larger than the order total. Staff can select a Reward ID or leave it blank to save points.
 4. The preview shows order value, discount and expected new balance. Staff confirm order completion; the inventory and loyalty transaction are posted together. A receipt-style **loyalty confirmation** displays the points and discount recorded. Completing the same order again cannot earn more points.
 
 Earning uses **10 whole points per $1 CAD** of eligible spending; fractions are rounded down. Points are earned on the value after the selected discount: a $20 order with a $5 reward earns `($20 − $5) × 10 = 150 points`. Rewards are redeemed using **previously earned** points, not the points from the current order. The built-in examples are listed near the top of this README. The stored `Order.totalAmount` does not change; the accounting Sale records $15 in this example. The loyalty quote is **not an actual payment or tax receipt**.
 
-For other modules or a future GUI, `InventoryService.create_customer_order(recipes, staff_user_id, customer_id)` saves a linked Pending order. `LoyaltyService.complete_order_with_loyalty(staff_user_id, customer_id, order_id, reward_id=...)` completes it and posts points **atomically**. Use `preview_purchase()` before presenting a reward. `InventoryService.complete_customer_order()` remains available for inventory-only orders with no loyalty activity. For an already-Completed order that has no loyalty entry, `process_eligible_purchase()` records only the points/redemption without deducting stock again. Avoid calling both recording methods for the same order.
+For the desktop interface or other modules, `InventoryService.create_customer_order(recipes, staff_user_id, customer_id)` saves a linked Pending order. `LoyaltyService.complete_order_with_loyalty(staff_user_id, customer_id, order_id, reward_id=...)` completes it and posts points **atomically**. Use `preview_purchase()` before presenting a reward. `InventoryService.complete_customer_order()` remains available for inventory-only orders with no loyalty activity. For an already-Completed order that has no loyalty entry, `process_eligible_purchase()` records only the points/redemption without deducting stock again. Avoid calling both recording methods for the same order.
 
-The loyalty domain classes `LoyaltyAccount`, `LoyaltyTransaction`, `Reward` and `Redemption` are in `loyalty_models.py`. SQLite retains the existing integer IDs and foreign keys so other modules continue to work, while loyalty records also have stable `publicUUID` values for future integration. The optional Customer → LoyaltyAccount relationship allows customer profiles to exist without joining. Historical account balances, status and transaction records survive a normal application restart; the schema initializer only performs additive upgrades.
+The loyalty domain classes `LoyaltyAccount`, `LoyaltyTransaction`, `Reward` and `Redemption` are in `loyalty_models.py`. SQLite retains the existing integer IDs and foreign keys so other modules continue to work, while loyalty records also have stable `publicUUID` identifiers. The optional Customer → LoyaltyAccount relationship allows customer profiles to exist without joining. Historical account balances, status and transaction records survive a normal application restart; the schema initializer only performs additive upgrades.
 
 ---
 
@@ -431,26 +435,26 @@ Payroll uses the same Employee accounts managed through **20 — Manage users**.
 | Payroll option | Action | Details |
 |---|---|---|
 | **1** | Open payroll | Enter a pay date in `YYYY-MM-DD` format. Only one payroll can exist per pay date; new runs start as **Draft**. |
-| **2** | Enter or correct hours | Choose an existing **Draft Payroll ID** (validated immediately), then select Employee IDs and enter regular/overtime hours. Repeat until you leave the Employee ID blank. |
+| **2** | Enter or correct hours | Choose an existing **Draft Payroll ID** (validated immediately), then select Employee User IDs and enter regular/overtime hours. Repeat until you leave the Employee User ID blank. |
 | **3** | Validate, calculate and review | Checks for missing employees, hourly rates and unrealistic/zero hours. Calculates deductions, net pay and total payroll cost when valid. |
 | **4** | Approve payroll | Reviews a fully calculated Draft and locks it as **Approved**. |
 | **5** | Record payment and expense | For an Approved run **after employees have been paid**, mark it **Paid** and post one expense to the Accounting Ledger. This cannot be undone from the menu. |
 | **6** | View pay stubs | Shows per-employee pay stubs for Approved and Paid payrolls. |
-| **7** | Set employee hourly rates | Choose an active Employee ID, enter a positive hourly rate, and repeat until the ID is blank. Changing a rate invalidates earlier calculations in Draft payrolls that include that employee. |
-| **8** | Remove an employee | Choose a Draft payroll, review its entries, and remove Employee IDs in a loop until blank. Recalculate after removing anyone. |
+| **7** | Set employee hourly rates | Choose an active Employee User ID, enter a positive hourly rate, and repeat until the ID is blank. Changing a rate invalidates earlier calculations in Draft payrolls that include that employee. |
+| **8** | Remove an employee | Choose a Draft payroll, review its entries, and remove employees by User ID in a loop until blank. Recalculate after removing anyone. |
 | **0** | Return | Back to the main menu. |
 
 ### First payroll setup
 
-1. Sign in as Owner. If the Employee list is empty, create an Employee through **20 → 2** (or activate a disabled Employee under **20 → 6**).
-2. Select **17 → 7**, set each employee's hourly rate and press Enter at a blank Employee ID to return.
+1. Sign in as Owner. If the Employee list is empty, create an Employee through **20 → 2** (or activate an inactive Employee under **20 → 6**).
+2. Select **17 → 7**, set each employee's hourly rate and press Enter at a blank Employee User ID to return.
 3. Select **17 → 1** to open a payroll for a date, then **17 → 2** to enter hours for the employees who worked that period.
 4. Select **17 → 3** to validate and calculate. If an employee has no rate, no hours, more than **80 regular hours**, or more than **120 total hours**, the program explains what to correct. Enter hours through option 2, set the rate through option 7, or remove the employee through option 8, then recalculate.
 5. Select **17 → 4** to approve. Review/print the text pay stubs under **17 → 6**. Once payments have been made outside this system, record the expense under **17 → 5**.
 
 **Pay rules are simplified examples, not actual payroll deductions or employment-law calculations.** The current model assumes a two-week period, **1.5×** overtime pay and a flat **20% deduction** from gross earnings. Total payroll cost equals the sum of gross earnings (net pay plus deductions). Payroll does **not** send payments, calculate taxes accurately, file remittances, or interface with a bank. The Accounting Ledger records the total expense only; it is not a full general ledger.
 
-Employee IDs are distinct from User IDs. Find Employee IDs in payroll options **2** or **7**; use User IDs for account administration under option **20**. A missing payroll must first be opened with **17 → 1**, while a missing Employee account must be created/enabled in **20**. Historical pay stubs keep calculated amounts if an employee's current hourly rate later changes; the employee-rate column shown in payroll details is always the **current** rate.
+Employee IDs are distinct from User IDs. Payroll and account forms accept User IDs; the application resolves the separate Employee IDs internally. A missing payroll must first be opened with **17 → 1**, while a missing Employee account must be created/enabled in **20**. Historical pay stubs keep calculated amounts if an employee's current hourly rate later changes; the employee-rate column shown in payroll details is always the **current** rate.
 
 ---
 
@@ -488,7 +492,7 @@ The dashboard balance is **sales − purchases − expenses**. Inventory adjustm
 
 The first time an Owner opens option 18, previously completed shop orders with recipe lines and a recorded total are added to the ledger if they have no source-linked Sale yet **and the ledger has no pre-existing manual Sale entries**. When a historical loyalty transaction exists, its net `finalAmount` is used. If manual sales already exist, automatic historical import is skipped to avoid potential double-counting: the Owner receives an explanation and can use **18 → 8** to review and import individual orders after comparing them with existing entries. The sync is repeat-safe. Existing payroll expenses are linked to their payroll runs without changing their transaction IDs or amounts. Financial entries are **not populated with fictional sample transactions simply because the ledger is empty**. The optional shop dataset under option 21 contains its own sample completed orders, which are recorded as sample sales when you explicitly load that dataset.
 
-The original payroll module and the standalone accounting addition used different column names in the same SQLite tables. This release supports both without replacing either transaction table:
+Existing installations can use either accounting column layout. Both are supported in the same transaction table:
 
 | Field | Older merged/payroll database | Accounting-format database |
 |---|---|---|
@@ -555,15 +559,15 @@ step for feedback. The Owner can optionally load sample accounts via **21 → 7*
 Customers only see their own feedback, while Employees/Owners can read and
 review feedback from all customers. If a customer account is missing its
 underlying Customer record, the user is directed to the Owner's account
-management screen rather than receiving a generic database error. Disabled
+management screen rather than receiving a generic database error. Inactive
 accounts must be reactivated by an Owner before accessing feedback.
-Feedback history is preserved when an account is disabled; changing the role
+Feedback history is preserved when an account is inactive; changing the role
 or deleting the Customer identity is blocked while it has feedback history.
 
 **Shared storage:** All feedback is stored in the existing persistent SQLite
-`btm495.db` in a new `Feedback` table. Each feedback record belongs to an
+`btm495.db` in the `Feedback` table. Each feedback record belongs to an
 existing `Customer.customerID`, has an integer `feedbackID`, a stable
-`publicUUID` for future merged-system integration, its text, an optional
+`publicUUID` identifier, its text, an optional
 integer rating, an ISO-8601 `submissionDate`, and a `Submitted`/`Reviewed`
 status. A customer's login ID and Customer ID are different identifiers:
 `FeedbackService` resolves the latter from the signed-in user and verifies
@@ -582,7 +586,7 @@ feedback_id)`. New Python modules should use the snake_case methods; camelCase
 compatibility aliases such as `submitFeedback`, `storeFeedback`,
 `viewSubmittedFeedback`, `viewFeedback`,
 `getFeedback`, `reviewFeedback`, and `updateStatus` are available. See
-`test_feedback.py` for examples.
+`Test Cases/test_feedback.py` for examples.
 
 **Backup/reset:** Normal restarts and routine database backups retain feedback.
 Owner option 21 **Reset** deliberately clears feedback alongside other
@@ -593,7 +597,7 @@ created so previous data can be recovered with the restore option.
 
 ### Optional fictional customer/staff logins (21 → 7)
 
-These eight accounts are **never imported unless an Owner explicitly selects 21 → 7**, confirms and re-enters the Owner password. Their original sample credentials are:
+These eight fictional accounts are imported only on an Owner's request: use **21 → 7** in the CLI, or **Demo & backups → Load 8 sample users** in the desktop app. The desktop **Load complete demo** action also includes them. Imports require confirmation and Owner password verification. Their sample credentials are:
 
 | Username | Name | Role | Sample password |
 |---|---|---|---|
@@ -613,7 +617,7 @@ Each gets a Profile with fictional contact information and birth date. Repeating
 | Sub-option | Action | What is saved or replaced? |
 |---|---|---|
 | **1 — Load sample data** | Opens a submenu with separate starter shop, trend-history, accounting and payroll samples. | These imports add only their selected records; they do not reset the database. Owner password verification and confirmation are required. See the next table. |
-| **2 — Create backup** | Copies the current database to `backups/`. | **Does not change** the active database. |
+| **2 — Create backup** | Copies the current database to its configured backup folder (`Backups/` for project data). | **Does not change** the active database. |
 | **3 — Backup + reset + sample data** | Creates a backup, clears the live database and loads the supplied sample dataset. | **Preserves Customer/Employee/Owner login accounts, profiles and employee hourly rates**; clears loyalty, payroll and business transactions. Use when a consistent starting dataset is needed. |
 | **4 — Backup + reset empty** | Creates a backup and prepares a blank set of business tables. | **Preserves login accounts, profiles and employee hourly rates**; clears loyalty, payroll and other business records. |
 | **5 — Restore a previous backup** | Lists backups, allows you to choose one and backs up the current state before restoring. | Replaces the **entire** live database with the selected backup, including accounts and unrelated tables. |
@@ -651,16 +655,14 @@ All sample quantities, supplier contacts and menu prices are fictional.
 
 ### Where backups go
 
-Backups are stored in the **`backups/` folder beside `btm495.db`**, with timestamped names similar to:
+Databases in this application's **`Data/`** folder use **`Backups/` in the main folder**. Explicitly selected external databases keep using a `backups/` folder beside their database file. Backup filenames include the database name and a timestamp, for example:
 
 ```text
 OnigiriInventory/
-    inventory_cli.py
-    inventory_service.py
-    inventory_db.py
-    demo_tools.py
-    btm495.db                    <-- active database
-    backups/
+    Source/
+    Data/
+        btm495.db                <-- active database
+    Backups/
         btm495_backup_20261018_153000_123456_before_reset_abc12345.db
         btm495_backup_20261018_154500_123456_before_restore_def67890.db
 ```
@@ -717,11 +719,11 @@ The `RecipeIngredient` table stores the amount of an ingredient needed for one s
 ### Using an existing `btm495.db`
 
 1. **Make a separate copy of the database before connecting it.**
-2. Put the application's `.py` files alongside that `btm495.db`, or carefully arrange for `inventory_db.py` to point to your intended database location.
-3. Run `inventory_cli.py` normally. It will use the existing file and add missing inventory, profile, loyalty, payroll, accounting and feedback-supporting tables/columns as needed, without resetting it on startup. Existing User records are given linked profiles if missing.
+2. For source launches, place the existing database at `Data/btm495.db` and its backups in `Backups/`, without overwriting other files. For the executable, you can instead select the database in its existing location using `--choose-database`.
+3. Run `Tools/START_HERE.bat` or `py Source/inventory_cli.py`. It will use the existing file and add missing inventory, profile, loyalty, payroll, accounting and feedback-supporting tables/columns as needed, without resetting it on startup. Existing User records are given linked profiles if missing.
 4. Test the connection using a **copy** of your real database first, especially if its existing schema differs from the supplied tables.
 
-**Caution:** The database path is based on the folder containing `inventory_db.py`, **not** whatever folder your terminal happens to be in. If you accidentally run a second copy of the application from another extracted folder, it may create a second `btm495.db` there. Always run the correct copy.
+**Caution:** Source launches locate `Data/btm495.db` relative to the application folder, independently of the terminal's working directory. Running another extracted copy uses its own `Data` folder. The executable uses an explicit or remembered selection first; without one, it uses an existing `Data/btm495.db` beside the executable or asks you to choose a database. Always check the intended installation and data location.
 
 **Loyalty is integrated** into order options **1/2** and menu option **5**; **payroll** is under **17**, **accounting** under **18**, **trend prediction** under **19**, and **customer feedback** under **6**. The shared accounting service also posts source-linked entries for qualifying financial events in the other modules. The trend dashboard reads existing orders, loyalty records and inventory movements without modifying them. This remains a simplified financial ledger with basic trend estimates, not full double-entry accounting or advanced analytics. Updating an external order's status with raw SQL does **not** automatically deduct ingredients, grant points or post a sale. An external ordering system should call `LoyaltyService.complete_order_with_loyalty()` for a linked, enrolled customer, or `InventoryService.complete_customer_order()` for an inventory-only order, rather than directly updating database status.
 
@@ -730,8 +732,8 @@ The `RecipeIngredient` table stores the amount of an ingredient needed for one s
 | Problem | What to check |
 |---|---|
 | `py` or `python` command not found | Confirm Python 3.10+ is installed, then try `py`, `python` or `python3` as appropriate. |
-| `No module named inventory_service` or `demo_tools` | Extract **all** files to one folder; don't run only `inventory_cli.py` in isolation. |
-| Application creates a new, empty database | Confirm you launched the copy of the application that sits beside the intended `btm495.db`. |
+| `No module named inventory_service` or `demo_tools` | Keep the complete project layout and all application modules in `Source/`; use the supplied launcher or run `py Source/inventory_cli.py`. |
+| Application creates a new, empty database | Confirm the source installation contains the intended `Data/btm495.db`, or check the executable's selected database/shortcut arguments. |
 | Cannot log in after closing/restarting | Use the same username and password. If you switched to a different folder/database or restored a backup, its accounts may differ. |
 | Walk-in customer cannot log in | Walk-ins created in 5 → 1 now receive a username and either a staff-chosen or randomly generated password. Give them those credentials; Owners may reset forgotten passwords using 20 → 5. Walk-ins created in older versions without credentials require an Owner password reset and username setup. |
 | Password appears invisible | This is expected: the program deliberately hides password input. |
@@ -767,11 +769,14 @@ The `RecipeIngredient` table stores the amount of an ingredient needed for one s
 
 ## 11. Optional automated tests
 
-From the project folder, run:
+Tests are stored in `Test Cases/`. On Windows, double-click `Tools/RUN_TESTS.bat`, or run the following from the main application folder. Test discovery makes the `Source/` modules available automatically:
 
 ```bat
 py -m unittest discover -v
 ```
+
+Desktop checks skip when Tkinter or a usable graphical display is unavailable.
+Install the optional Matplotlib dependency to exercise the graph checks.
 
 On macOS or Linux, replace `py` with `python3`. The tests exercise the grouped main-menu routing and Customer access rules, inventory, profiles, user management, loyalty, payroll, accounting, trend predictions, sample-data import options, feedback submission/review (including returning from a review prompt with 0 or Enter), and backups, including Pending-order completion, discounted sale posting, supplier invoice amounts, valued stock changes, both accounting database formats, forecast calculations, rollback and duplicate prevention. **They create temporary test databases, not your live `btm495.db`.**
 
@@ -781,12 +786,216 @@ If you're updating from an earlier version and **already have saved data**:
 
 1. Close the running application.
 2. Back up your existing `btm495.db` to another folder first.
-3. Replace the application `.py` files and `README.md` with the updated files, or just replace `README.md` if you're only updating this guide.
-4. **Do not overwrite or delete `btm495.db` or the `backups/` folder.**
+3. Replace the files in `Source/`, `Tools/` and `Test Cases/`, the README and the executable as applicable; preserve the folder structure. For an executable-only installation, follow [Windows executable and desktop shortcut](#windows-executable-and-desktop-shortcut).
+4. **Do not overwrite or delete `Data/` or `Backups/`, including personal database copies.** When upgrading an older flat layout, move its existing `btm495.db` and personal copies into `Data/`, and retain its backups in `Backups/`. Recreate the desktop shortcut for the new executable and data paths.
 5. Launch the application again and log in as normal.
 
 The repository or source ZIP does not include an active database. Replacing the README or Python files does not reset an existing `btm495.db`.
 
 ---
 
-**Current scope:** This is a local, single-location command-line management application. It supports inventory, ordering, users, profiles, loyalty, simplified payroll, source-linked accounting, basic historical trend estimates and customer feedback. It does not process actual customer or employee payments, connect to bank feeds, calculate statutory payroll deductions, operate as a production POS, support multiple locations, or provide full double-entry accounting or statistically validated demand forecasting.
+**Current scope:** This is a local, single-location management application with desktop and command-line interfaces. It supports inventory, ordering, users, profiles, loyalty, simplified payroll, source-linked accounting, basic historical trend estimates and customer feedback. It does not process actual customer or employee payments, connect to bank feeds, calculate statutory payroll deductions, operate as a production POS, support multiple locations, or provide full double-entry accounting or statistically validated demand forecasting.
+
+## 13. Desktop interface
+
+The desktop interface is an additional presentation layer over the same inventory,
+loyalty, payroll, accounting, profile, user-management and feedback services used by
+the CLI. Source launches use the **same `Data/btm495.db` in the main application folder**,
+regardless of the terminal's working directory. Existing IDs, passwords, profiles,
+stock and history are retained. Keep your existing database in this installation's
+`Data/` folder; running another extracted copy uses that copy's own database location. The executable uses the database selected at launch or pinned in its shortcut.
+
+### Launch and requirements
+
+On Windows, double-click **`Tools/START_DESKTOP.bat`**, or run:
+
+```bat
+py Source/desktop_app.py
+```
+
+On macOS/Linux, run `python3 Source/desktop_app.py`. Tkinter and a graphical desktop
+session are required. To check Tkinter in the environment used to launch the app,
+run `py -m tkinter` on Windows or `python3 -m tkinter` on macOS/Linux. If the module
+is unavailable, enable Tcl/Tk in your Python installation or install your operating
+system's matching Tkinter package. The CLI remains available through
+**`Tools/START_HERE.bat`** or `py Source/inventory_cli.py`, even without Tkinter.
+
+The Windows desktop launcher keeps the console available so startup/import errors
+are visible. Matplotlib remains optional: `py -m pip install matplotlib` enables
+graphs in the same Python environment. Numerical reports work without it. No other
+third-party runtime package is required.
+
+### Login, navigation and appearance
+
+- On a fresh database, choose **Set up Owner account**. On an existing database,
+  sign in with your existing credentials. Fictional users and transactions are
+  never loaded automatically. There is no public Customer signup; Owners manage
+  accounts under **Users**, and staff can register walk-ins under **Loyalty**.
+- The app starts full screen. **F11** toggles full screen; **Escape** returns to a
+  regular window. **Log out** and **Exit** are together at the top right.
+- Staff use a scrolling sidebar for Dashboard, Inventory, Recipes, Orders,
+  Suppliers, Purchase orders, Alerts, Inventory history, Loyalty, Feedback, and Trends. My profile and Settings are pinned beneath the account name at the bottom left. Owners additionally have Accounting, Payroll, Users,
+  and Demo & backups. Customers have Dashboard, their own Loyalty and Feedback,
+  My profile, and Settings. They cannot access administrative screens or actions.
+- Main tables have search, column filters, sorting and horizontal/vertical scrolling.
+  Click a heading to sort, select a row to prefill an action's ID, or double-click
+  a row to inspect its displayed values. Long forms scroll and have Save/Cancel
+  controls. Closing or cancelling an unfinished form discards that form's input.
+- **Settings → Save colour scheme** selects Classic, Sage, Ocean, Midnight, McDonald's, Starbucks or Tim Hortons.
+  Preferences are saved per User ID in the additive `DesktopAppearance` table.
+  Login always uses Classic. This table does not modify core business records.
+
+### Desktop workflows
+
+| Screen | Workflow |
+|---|---|
+| Orders | Create a graphical cart and save it as Pending, optionally linked using a Customer User ID. Select **Complete order** separately; only completion deducts stock. **Assign customer**, **Cancel order** and **View order lines** are also available. |
+| Loyalty checkout | An unenrolled linked Customer can be enrolled before completion. Applicable rewards are filtered by balance and order amount. Review the discount, net Sale and points before confirming. Stock, status, loyalty and Sale commit together through the shared services. Cancellation leaves the order Pending. |
+| Loyalty | Staff can list/find customers, enroll accounts using their **User ID**, register walk-ins, view balances/history and process older completed orders once. Walk-in registration displays the username and entered/generated password once; give them to the customer. All customer forms accept **User IDs**, while records retain their separate Customer IDs internally. Owners also manage rewards and loyalty status. |
+| Inventory | View stock and LOW/OK status, add ingredients, set thresholds, adjust quantities or receive stock. An optional adjustment value creates a linked Inventory Adjustment; blank values never create financial amounts. |
+| Deliveries | Enter the ingredient, quantity, optional supplier/PO, optional invoice amount and reference. Manual receiving under Inventory records one ingredient per action; PO receiving collects all delivered ingredient quantities and one optional invoice in a single receipt. Never repeat a whole invoice on each line. PO validation and partial-delivery rules use the existing service. Without an amount, stock still updates and the app explains that no Purchase was posted. |
+| Purchase orders | Choose a supplier and ingredients from dropdowns showing current stock and LOW STOCK tags; enter quantities and optional unit costs. Inspect order lines and outstanding quantities, then receive selected orders with one quantity per ingredient and an optional invoice. Creating the PO does not increase inventory. |
+| Users | Owners create, inspect, edit, enable/disable, reset passwords, change roles or delete unused accounts. Editing supports username, date of birth and clearing optional fields. Historical dependencies prevent unsafe deletion/role changes. Employee IDs are distinct from User and Customer IDs. |
+| Payroll | Set employee rates, open a period, enter hours, review saved entries, calculate, approve, view stubs and mark Paid. Eligible employees are listed alphabetically. Use **Add** to stage each employee's hours, then **Save** to commit the entire batch together; Cancel discards unsaved entries. Payroll entries show employee names beside Employee IDs. A Draft payroll is validated before hour entry; eligible employees need a positive rate. Approved/Paid runs cannot be edited. Payment records one linked Expense and does not transfer money. |
+| Accounting | View/add/edit permitted entries, reconcile, review/resolve discrepancies and inspect reconciliation history. **Review historical order sales** combines the order list and selection in one window before importing; check manual Sales first to avoid duplicate revenue. Sample accounting imports remain optional and Owner-authorized. |
+| Feedback | Customers submit text with an optional 1–5 rating and view only their own submissions. Staff review all submissions and mark them Reviewed. Loyalty enrollment is not required. |
+| Trends | Sales, revenue and ingredient forecasts show numerical results and an embedded Matplotlib graph with the recorded-history table directly below it. Forecasts still average the latest three recorded dates. Ingredient reports use the ingredient's actual unit and include stock/reorder levels, seven-day estimates and coverage assumptions. Missing history or graph support produces an explanatory message. Viewing trends changes no business history. |
+| Demo & backups | Owners can load the **complete demo** or individual sample datasets, or create a backup. The complete demo includes fictional accounts, loyalty histories/redemptions, feedback, purchasing, stock alerts, payroll runs and a positive sample ledger balance. It is staged, checked, backed up and applied once without duplicating a repeated import. Imports preserve existing repeat-safety and authorization checks. **Reset business data**, **Factory reset** and **Restore backup** are also available here. They require Owner password verification, typed RESET/RESTORE confirmation, and automatic safety backups. The session returns to login after replacement. |
+
+Both interfaces continue using the existing accounting schema compatibility logic
+for `date`/`type` and `transactionDate`/`transactionType`. No core schema replacement
+or database reset is needed for the desktop interface. Preserve `Data/` and `Backups/`
+when replacing source files.
+
+### Display and record details
+
+Navigation uses compact, left-aligned module labels and a smoothly sliding,
+full-row selection highlight with a light accent edge in every colour scheme. Menu
+labels stay in place; the moving highlight reveals bold text from the top or bottom
+as it passes, rather than carrying a duplicate label. Account name, role,
+username, My profile and Settings remain at the bottom left. The header has a live
+clock in **EST (UTC-05:00)**. Table dates use **MM-DD-YYYY HH:MM:SS EST**.
+Historical date-only values display local midnight because no time was recorded;
+stored dates remain unchanged. Table headings and values are centered in equal-width
+columns. Scrollbars appear only when content overflows and use slim, rounded thumbs
+without arrow buttons. Dropdowns use flat, theme-aware fields, chevrons, and complete accent outlines on hovered fields and their open lists, while
+preserving keyboard selection and type-ahead behavior. Hovering anywhere over a
+dropdown, including its text and arrow, smoothly fades the full outline in and out.
+Open dropdowns retain their accent outline. Selecting an option or moving away
+fades it out; retained keyboard focus does not keep the hover outline on.
+Dropdowns use native border
+drawing to keep wide selectors, including Settings, responsive. Open lists align
+with the field's outer edges and share a single thin divider, whether they open
+above or below the field. Dropdown fields and options share 12-point Segoe UI text
+and aligned left padding. Option rows are at least 32 pixels tall for easier selection;
+other application text sizes are unchanged. Arrow keys, Enter, Escape, Tab, type-ahead,
+mouse selection and list scrolling remain available.
+Filters retain all valid
+status choices even when no matching records exist and explain empty results.
+
+New demo imports use varied fictional business-hour times for orders, stock events,
+accounting, loyalty and feedback. Linked order consumption and Sales share a completion
+time, and calendar dates and daily forecast totals stay the same. Demo payroll rows
+also show a time, stored separately in the optional `Payroll.payTime` column so pay
+date validation and pay calculations remain unchanged. Existing rows and previously
+imported datasets are not retimed by reloading them; repeat-safe imports still skip
+data already loaded. Birthdays remain calendar dates.
+Inventory history and Accounting default to newest transaction first; column headings still sort.
+New manual accounting entries record the current EST time on the selected date;
+explicit timestamps are preserved, including when editing an entry. Existing
+historical records are not rewritten.
+User account status is labelled **Active** or **Inactive**. Reward Active uses
+**Yes** or **No**. The staff dashboard's feedback badge counts submissions awaiting
+review and opens the Feedback screen.
+
+Double-click a recipe for its ingredient requirements and stock-based serving
+capacity; an order for its recipes, completing staff name (when recorded in stock consumption history), loyalty and linked Sale; a reward for its
+eligible-customer count and list; a supplier for its open/closed POs and ingredient
+catalogue; or a PO for its quantities, assigned supplier, estimated costs and
+recorded invoices. Supplier PO rows open their respective details. Use **Suppliers
+→ Set supplied ingredient** to maintain the catalogue or **View supplied ingredients** to inspect it.
+Purchase orders with a selected supplier offer only that supplier's catalogue ingredients,
+including ingredients recorded in prior deliveries. Suppliers with an empty catalogue
+need supplied ingredients configured first. An unassigned purchase order can use any ingredient. Legacy records without
+supplier assignments or unit costs display **Not recorded**. Estimated PO costs
+never post financial entries: only entered delivery invoice amounts do so.
+
+Purchase-order supplier IDs, nullable line unit costs and the `SupplierIngredient`
+catalogue are additive schema changes. Existing identifiers, data, accounting
+formats and linked history remain intact. Source service methods continue to use
+subtype IDs; CLI and GUI forms translate entered User IDs at the presentation
+boundary. No existing User, Customer or Employee IDs are renumbered.
+
+### Windows executable and desktop shortcut
+
+`TheOnigiriShop.exe` is a standalone 64-bit Windows desktop application. It includes
+Python, Tkinter, Matplotlib with the TkAgg graph backend, and the application icon.
+The destination computer does not need Python. Restaurant databases and backups
+are never bundled in the executable.
+
+**For this existing source installation:** run `Tools/CREATE_DESKTOP_SHORTCUT.bat` after
+building. When `Data/btm495.db` exists, the shortcut uses that exact file in place,
+with backups in the main application folder's `Backups/`. The CLI and shortcut therefore share the same data. Shortcut creation does
+not open the business application or migrate the database. An unrelated desktop
+shortcut with the same name is not overwritten; a numbered shortcut is created instead.
+
+**Running the executable directly:** explicit command arguments take priority,
+followed by a remembered database. With no saved choice, an existing
+`Data/btm495.db` beside the executable is used. Otherwise, choose Yes to select
+an existing Onigiri Shop database, No to explicitly create a new database in a
+chosen folder, or Cancel to exit. The choice is remembered in
+`%LOCALAPPDATA%/TheOnigiriShop/settings.json`. If a remembered or explicitly selected
+file is missing, startup stops with an explanation; it never silently creates a
+replacement. To choose another database, run:
+
+```bat
+TheOnigiriShop.exe --choose-database
+```
+
+Explicit options are also available:
+
+```bat
+TheOnigiriShop.exe --database "C:\Restaurant\btm495.db"
+TheOnigiriShop.exe --new-database "C:\Restaurant\new-shop.db"
+TheOnigiriShop.exe --create-shortcut --database "C:\Restaurant\btm495.db"
+```
+
+`--database` requires an existing valid shop database. `--new-database` refuses
+an existing file. Shortcut arguments take precedence over the remembered choice;
+if you move the database, recreate the shortcut for its new location. A saved
+choice for this installation's former root-level `btm495.db` is updated only if
+that file is missing and the relocated `Data/btm495.db` is valid. Other missing
+selections produce an error without redirecting to another database. Databases
+in this application's `Data/` folder use its root `Backups/`; external databases
+use `backups/` beside their selected file. Neither data nor backups are stored
+inside the executable's temporary extraction folder. Keep the entire existing data folder when moving
+an installation. The selected folder must be writable for normal SQLite updates
+and backups. Normal compatible schema initialization still occurs when the app opens.
+
+For an application upgrade, close the app and replace the executable at the same
+location. Never move or replace a running executable: later imports still read
+that file, so replacement can break features such as graphs. The build spec refuses
+to overwrite the target while it is running; a separate staging build is allowed.
+Keep the database, its backups and the settings file. If moving the
+executable, recreate the shortcut. First startup may take a few seconds while the
+single-file executable extracts its bundled runtime.
+
+To rebuild on Windows, install the build tools into your Python environment:
+
+```bat
+py -m pip install pyinstaller matplotlib
+```
+
+Run `Tools/BUILD_WINDOWS_EXE.bat`, or from the main application folder:
+
+```bat
+py -B -m PyInstaller --noconfirm --distpath . --workpath Build Tools/TheOnigiriShop.spec
+```
+
+The spec includes only explicit application resources and uses TkAgg for graphs.
+The executable is written directly to the main folder, with intermediate files
+in `Build/`; no `dist/` folder is needed. Build output never includes restaurant
+databases or backups. Build tools are required
+only for building; they are not additional source-app runtime requirements.
+
+Buttons and table rows provide hover feedback. Column resizing retains the responsive, even-width grid. Restaurant-inspired colour schemes are appearance presets only.
