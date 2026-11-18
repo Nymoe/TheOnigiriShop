@@ -1,0 +1,43 @@
+# Application databases and backups
+/Data/
+/Backups/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Generated application builds
+/Build/
+/dist/
+/TheOnigiriShop.exe
+
+# Python generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Testing and coverage files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE settings
+.idea/
+.vscode/
+
+# Local environment variables
+.env
+.env.*
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
