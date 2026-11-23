@@ -18,7 +18,7 @@ from statistics import mean
 import tkinter as tk
 from tkinter import ttk, messagebox, font as tkfont
 
-from desktop_widgets import AutoScrollbar, SmoothCombobox, scroll_if_needed, display_datetime, EST, title_label, hover_button, table_hover, darken_color, modern_controls
+from desktop_widgets import AutoScrollbar, SmoothCombobox, scroll_if_needed, display_datetime, EST, title_label, hover_button, button_colors, table_hover, rounded_scroll, darken_color, modern_controls, selection_action, password_entry, RoundedFrame, RoundedControls
 from user_identity_service import role_id, user_id_for_role
 from inventory_db import DEFAULT_DB
 from inventory_service import InventoryService, InventoryError, _ident
@@ -37,6 +37,8 @@ from trend_prediction_service import (BusinessData, IngredientData, TrendPredict
 from sample_users import load_sample_users
 from appearance_preferences import ThemePreferences, THEMES, DEFAULT_THEME
 from application_paths import asset_path
+from desktop_preferences import DesktopPreferences
+from desktop_accessibility import Accessibility, accessible_palette
 
 # The palette is selected at runtime; services and data remain unchanged.
 def set_palette(name: str) -> None:
@@ -93,6 +95,7 @@ def popup_dimensions(parent, desired_width: int, desired_height: int,
 
 
 def center_popup(window, parent, width: int, height: int) -> None:
+    window._popup_size=(width,height)
     """Position with screen bounds to avoid off-screen dialog edges."""
     parent.update_idletasks()
     screen_w = max(width, window.winfo_screenwidth())
@@ -102,6 +105,36 @@ def center_popup(window, parent, width: int, height: int) -> None:
     x = max(0, min(x, screen_w - width))
     y = max(0, min(y, screen_h - height))
     window.geometry(f'{width}x{height}+{x}+{y}')
+
+
+def popup_exists(window):
+    try:return bool(window.winfo_exists())
+    except tk.TclError:return False
+
+
+def present_popup(window,parent):
+    """Map only after fonts, requested sizes and final placement are settled."""
+    accessibility=getattr(parent._root(),'accessibility',None)
+    if accessibility:accessibility.apply()
+    window.update_idletasks()
+    if not hasattr(window,'_popup_size'):
+        width,height=popup_dimensions(parent,max(400,window.winfo_reqwidth()),max(300,window.winfo_reqheight()))
+        center_popup(window,parent,width,height)
+    # Canvas window items receive their final geometry only when drawn, not
+    # while withdrawn. Complete that native draw invisibly before revealing
+    # the window; retain native parents, scrolling and widget APIs.
+    opacity=window.attributes('-alpha')
+    window.attributes('-alpha',0)
+    try:
+        window.deiconify()
+        # A transient of a withdrawn/minimized parent cannot become visible.
+        # Keep programmatic/background dialogs usable without waiting forever.
+        if parent.winfo_toplevel().winfo_viewable():window.wait_visibility()
+        window.update()
+    except tk.TclError:
+        if popup_exists(window):raise
+    finally:
+        if popup_exists(window):window.attributes('-alpha',opacity)
 
 
 def numeric_column(key: str, rows) -> bool:
@@ -133,9 +166,11 @@ def format_table_value(key: str, value) -> str:
     if value is None:
         return ''
     raw = str(value)
+    if key=='date' and raw.endswith(' (Time Not Recorded)'):
+        return str(display_datetime(raw[:10])).split(' ',1)[0]+' (Time Not Recorded)'
     if key in ('isActive','affordable'):return 'Yes' if value in (True,1,'1') else 'No'
     if raw=='Inactive':return 'Inactive'
-    if any(part in key.lower() for part in ('date','createdat','updatedat','resolvedat','loadedat','performedat')):
+    if any(part in key.lower() for part in ('date','createdat','updatedat','resolvedat','loadedat','performedat','recordedat')):
         return str(display_datetime(value,utc=key in ('createdAt','updatedAt','resolvedAt','loadedAt','performedAt')))
     label = key.casefold()
     if ('point' not in label and not label.endswith('id') and
@@ -168,7 +203,7 @@ def size_table_columns(tree: ttk.Treeview, preferred: dict[str, int], width: int
     """Align headers to a full-width responsive grid; keep horizontal scroll."""
     keys = list(tree['columns'])
     # Leave a small border allowance to avoid a spurious horizontal scroll bar.
-    widths = allocate_table_widths([preferred[k] for k in keys], max(0, width - 5))
+    widths = allocate_table_widths([preferred[k] for k in keys], max(0, width - 3))
     for key, size in zip(keys, widths):
         tree.column(key, width=size, stretch=False)
 
@@ -188,8 +223,9 @@ def preferred_table_widths(rows, cols) -> dict[str, int]:
 
 class InputDialog(tk.Toplevel):
     """Responsive modal form: editable fields scroll; Save/Cancel remain visible."""
-    def __init__(self, parent, title, fields, help_text='', confirm='Save', batch=None):
+    def __init__(self, parent, title, fields, help_text='', confirm='Save', batch=None, focus=None):
         super().__init__(parent)
+        self.withdraw()
         self.result = None
         self.batch = batch
         self.staged = []
@@ -226,20 +262,27 @@ class InputDialog(tk.Toplevel):
         scrollbar.pack(side='right', fill='y')
         canvas.pack(side='left', fill='both', expand=True)
         first = None
+        self.controls = {}
         for field in fields:
             key, label, default, kind, *options = field
-            tk.Label(inside,text=label,bg=SURFACE,fg=INK,
+            tk.Label(inside,text=title_label(label),bg=SURFACE,fg=INK,
                  font=(FONT,10,'bold'),justify='center').pack(fill='x',pady=(10,4))
             var=tk.StringVar(value=str(default) if default is not None else '')
             if kind == 'choice':
-                control=SmoothCombobox(inside,textvariable=var,values=options[0],state='readonly')
+                labels={title_label(v):str(v) for v in options[0]}
+                shown=tk.StringVar(value=title_label(default))
+                shown.trace_add('write',lambda *_,v=var,s=shown,m=labels:v.set(m.get(s.get(),s.get())))
+                control=SmoothCombobox(inside,textvariable=shown,values=list(labels),state='readonly')
+            elif kind == 'password':
+                control=password_entry(inside,var,bg=ENTRY,fg=INK)
             else:
-                control=tk.Entry(inside,textvariable=var,relief='solid',bd=1,
-                  justify='center',show='•' if kind=='password' else '',
-                  font=(FONT,11),fg=INK,bg=ENTRY,insertbackground=INK)
-            control.pack(fill='x', ipady=6, padx=4)
+                control=ttk.Entry(inside,textvariable=var,justify='center',
+                                  font='ShopDropdownFont',style='Search.TEntry')
+            control.pack(fill='x',padx=4)
+            (control.entry if kind=='password' else control).accessible_name=title_label(label)
             control.bind('<FocusIn>',lambda e:e.widget.icursor('end'),add='+')
             if first is None:first=control
+            self.controls[key]=control
             self._vars[key]=var
             if kind == 'password':
                 self._password_fields.add(key)
@@ -255,16 +298,20 @@ class InputDialog(tk.Toplevel):
         action_button(footer,confirm,self._submit).grid(row=0,column=2 if batch else 1,sticky='ew',padx=(5,0))
         self.bind('<Escape>',lambda _e:self.destroy())
         self.bind('<Return>',lambda _e:self._submit())
+        if hasattr(parent,'accessibility'):parent.accessibility.apply()
         self.update_idletasks()
         # Display as many fields as the monitor can show without scrolling.
         # For longer forms, keep the footer visible and scroll the middle.
         ideal = head.winfo_reqheight() + inside.winfo_reqheight() + footer.winfo_reqheight() + 40
         width, height = popup_dimensions(parent, width, max(300, ideal))
         center_popup(self, parent, width, height)
+        present_popup(self,parent)
+        if not popup_exists(self):return
         self.grab_set()
+        first=self.controls.get(focus,first)
         if first:
             first.focus_set()
-            first.icursor('end')
+            if hasattr(first,'icursor'):first.icursor('end')
         parent.wait_window(self)
 
     def _submit(self):
@@ -306,7 +353,7 @@ def action_button(parent, text, command, primary=True, small=False, danger=False
 
 
 def card(parent, padding=20):
-    frame = tk.Frame(parent, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1,
+    frame = RoundedFrame(parent, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1,
                      padx=padding, pady=padding)
     return frame
 
@@ -315,6 +362,7 @@ class OrderComposer(tk.Toplevel):
     """POS-style cart editor for recipes; returning a validated recipe-ID -> quantity map."""
     def __init__(self, parent, recipes):
         super().__init__(parent)
+        self.withdraw()
         self.result = None
         self.title('New customer order | The Onigiri Shop')
         self.configure(bg=LIGHT)
@@ -335,12 +383,12 @@ class OrderComposer(tk.Toplevel):
                  font=(FONT,10,'bold')).grid(row=0,column=1,sticky='ew',padx=4)
         self.recipe_search=tk.StringVar()
         self.recipe_sort=tk.StringVar(value='Name A–Z')
-        tk.Entry(catalog_filters,textvariable=self.recipe_search,justify='center',
-                 font=(FONT,10),bd=1,relief='solid').grid(row=1,column=0,sticky='nsew',padx=4)
-        SmoothCombobox(catalog_filters,values=['Name A–Z','Name Z–A','Price: low to high','Price: high to low'],
+        ttk.Entry(catalog_filters,textvariable=self.recipe_search,justify='center',
+                 font='ShopDropdownFont',style='Search.TEntry').grid(row=1,column=0,sticky='nsew',padx=4)
+        SmoothCombobox(catalog_filters,values=['Name A–Z','Name Z–A','Price: Low To High','Price: High To Low'],
                      textvariable=self.recipe_sort,state='readonly').grid(row=1,column=1,sticky='ew',padx=4)
         catalog_filters.columnconfigure((0,1),weight=1)
-        outer=tk.Frame(box,bg=SURFACE,highlightbackground=BORDER,highlightthickness=1)
+        outer=RoundedFrame(box,bg=SURFACE,highlightbackground=BORDER,highlightthickness=1)
         outer.pack(fill='both',expand=True)
         canvas=tk.Canvas(outer,bg=SURFACE,highlightthickness=0)
         sb=AutoScrollbar(outer,orient='vertical',command=canvas.yview)
@@ -369,7 +417,9 @@ class OrderComposer(tk.Toplevel):
             self.quantities[item['recipeID']]=var
             var.trace_add('write',lambda *_:self.update_total())
             spin=tk.Spinbox(row,from_=0,to=99,textvariable=var,width=5,justify='center',
-                           font=(FONT,12),relief='solid',bd=1)
+                           font=(FONT,12),relief='flat',bd=0,bg=ENTRY,fg=INK,
+                           buttonbackground=SECONDARY,insertbackground=INK,
+                           highlightthickness=2,highlightbackground=BORDER,highlightcolor=ACCENT)
             spin.grid(row=0,column=2,padx=8)
             spin.bind('<FocusIn>',lambda e:e.widget.icursor('end'),add='+')
         self.recipe_search.trace_add('write',lambda *_:self.filter_recipes())
@@ -388,19 +438,21 @@ class OrderComposer(tk.Toplevel):
         self.filter_recipes()
         self.update_total()
         center_popup(self, parent, width, height)
+        present_popup(self,parent)
+        if not popup_exists(self):return
         self.grab_set()
         parent.wait_window(self)
 
     def filter_recipes(self):
         # Hide and order menu rows without resetting any quantities in the cart.
         term=self.recipe_search.get().strip().casefold()
-        mode=self.recipe_sort.get()
+        mode=self.recipe_sort.get().casefold()
         visible=[r for r in self.recipes if term in r['name'].casefold()]
-        if mode=='Name Z–A':
+        if mode=='name z–a':
             visible.sort(key=lambda r:r['name'].casefold(),reverse=True)
-        elif mode=='Price: low to high':
+        elif mode=='price: low to high':
             visible.sort(key=lambda r:(float(r['price']),r['name'].casefold()))
-        elif mode=='Price: high to low':
+        elif mode=='price: high to low':
             visible.sort(key=lambda r:(float(r['price']),r['name'].casefold()),reverse=True)
         else:
             visible.sort(key=lambda r:r['name'].casefold())
@@ -446,6 +498,10 @@ class OnigiriDesktop(tk.Tk):
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('TheOnigiriShop.Desktop')
         super().__init__()
+        self._rounding=RoundedControls(self)
+        self._success_message=''
+        self._success_details=None
+        self._success_detail_label='View Details'
         self.bind('<MouseWheel>',self._route_page_scroll,add='+')
         self.bind('<Button-4>',self._route_page_scroll,add='+')
         self.bind('<Button-5>',self._route_page_scroll,add='+')
@@ -458,9 +514,18 @@ class OnigiriDesktop(tk.Tk):
         self.payroll = PayrollService(self.db_path)
         self.feedback = FeedbackService(self.db_path)
         self.appearance = ThemePreferences(self.db_path)
+        self.preferences = DesktopPreferences(self.db_path)
         self.theme_name = DEFAULT_THEME
         set_palette(self.theme_name)
         self.user = None
+        self.accessibility=Accessibility(self)
+        self.reduced_motion=False
+        self.bind('<Control-comma>',lambda e:self.navigate('Settings') if self.user else self.accessibility_dialog())
+        self.bind('<Control-1>',lambda e:self.navigate('Dashboard') if self.user else None)
+        self.bind('<Control-f>',self.focus_search)
+        self.bind('<Control-plus>',lambda e:self.zoom_text(1))
+        self.bind('<Control-equal>',lambda e:self.zoom_text(1))
+        self.bind('<Control-minus>',lambda e:self.zoom_text(-1))
         self.current_page = 'Dashboard'
         self.title('The Onigiri Shop | Restaurant Management')
         self.geometry('1230x800')
@@ -528,8 +593,13 @@ class OnigiriDesktop(tk.Tk):
         """Apply palette to newly-created widgets; never touch business records."""
         self.theme_name = name if name in THEMES else DEFAULT_THEME
         set_palette(self.theme_name)
+        uid=self.user['userID'] if self.user else None
+        self.accessibility.options=self.preferences.accessibility(uid)
+        self.reduced_motion=self.accessibility.options['reduced_motion']
+        globals().update(accessible_palette(THEMES[self.theme_name],self.accessibility.options['contrast']))
         self.configure(bg=LIGHT)
         self._style()
+        self.accessibility.queue()
 
     def choose_theme(self, name: str) -> None:
         """Change the current account's colour scheme from Settings only."""
@@ -538,6 +608,7 @@ class OnigiriDesktop(tk.Tk):
         self.appearance.set(name, self.user['userID'])
         self._use_theme(name)
         self.show_page('Settings')
+        self.show_success('Colour scheme saved.')
 
     def page_settings(self):
         self.section('Settings',
@@ -551,6 +622,9 @@ class OnigiriDesktop(tk.Tk):
                               state='readonly',justify='left',font=(FONT,12))
         picker.pack(fill='x',pady=(0,14))
         action_button(pane,'Save colour scheme',lambda:self.choose_theme(choice.get())).pack(fill='x')
+        action_button(pane,'Accessibility options',self.accessibility_dialog,primary=False).pack(fill='x',pady=(10,0))
+        action_button(pane,'Reorder quick actions',self.reorder_quick_actions,primary=False).pack(fill='x',pady=(10,0))
+        action_button(pane,'Read this page aloud',self.accessibility.read_page,primary=False).pack(fill='x',pady=(10,0))
         summary=tk.Label(pane,text='Classic · orange and cream  |  Sage · soft green  |  '
                  'Ocean · blue  |  Midnight · dark mode',
                  bg=SURFACE,fg=MUTED,justify='center',wraplength=350,
@@ -565,23 +639,129 @@ class OnigiriDesktop(tk.Tk):
         note.bind('<Configure>',lambda e:note.configure(
             wraplength=max(120,e.width-45)),add='+')
 
+    def focus_search(self,_event=None):
+        target=getattr(self,'search_entry',None)
+        if target and target.winfo_exists():target.focus_set();target.selection_range(0,'end')
+        return 'break'
+
+    def zoom_text(self,direction):
+        sizes=[100,115,130,150]
+        current=self.accessibility.options['text_size']
+        value=sizes[max(0,min(len(sizes)-1,sizes.index(current)+direction))]
+        self.save_accessibility({**self.accessibility.options,'text_size':value})
+        return 'break'
+
+    def save_accessibility(self,options):
+        uid=self.user['userID'] if self.user else None
+        self.preferences.save(uid,accessibility=options)
+        self._use_theme(self.theme_name)
+        if self.user:self.show_page(self.current_page)
+        else:self.show_auth()
+        self.show_success('Accessibility options saved.')
+
+    def accessibility_dialog(self):
+        win=tk.Toplevel(self);win.withdraw();win.title('Accessibility');win.configure(bg=SURFACE)
+        win.transient(self)
+        width,height=popup_dimensions(self,640,690);center_popup(win,self,width,height)
+        tk.Label(win,text='Accessibility',bg=SURFACE,fg=INK,font=(FONT,17,'bold')).pack(fill='x',pady=12)
+        holder=tk.Frame(win,bg=SURFACE);holder.pack(fill='both',expand=True)
+        canvas=tk.Canvas(holder,bg=SURFACE,highlightthickness=0)
+        scroll=AutoScrollbar(holder,orient='vertical',command=canvas.yview)
+        pane=tk.Frame(canvas,bg=SURFACE)
+        item=canvas.create_window((0,0),window=pane,anchor='nw')
+        pane.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda e:canvas.itemconfigure(item,width=e.width))
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        options=self.accessibility.options
+        vars={}
+        for key,label,choices in [('text_size','Text Size',['100%','115%','130%','150%']),
+                ('contrast','Colour / Contrast',['Standard','Colourblind Friendly','High Contrast']),
+                ('cursor','Cursor',['Standard','Crosshair','Hand'])]:
+            tk.Label(pane,text=label,bg=SURFACE,fg=INK).pack(fill='x',pady=(8,3))
+            vars[key]=tk.StringVar(value=f"{options[key]}%" if key=='text_size' else options[key])
+            SmoothCombobox(pane,textvariable=vars[key],values=choices,state='readonly').pack(fill='x',padx=20)
+        for key,label in [('narration','Read Focused Controls Aloud (Windows)'),('reduced_motion','Reduce Animations')]:
+            vars[key]=tk.BooleanVar(value=options[key])
+            ttk.Checkbutton(pane,text=label,variable=vars[key],style='Shop.TCheckbutton',
+                            takefocus=True).pack(anchor='center',pady=5)
+        tools=tk.Frame(pane,bg=SURFACE);tools.pack(fill='x',padx=16,pady=8)
+        for tool in ('Magnifier','Narrator','On-Screen Keyboard'):
+            action_button(tools,tool,lambda t=tool:self.accessibility.open_tool(t),primary=False,small=True).pack(fill='x',pady=3)
+        tk.Label(pane,text='Tab / Shift+Tab: move focus | Enter / Space: activate\n'
+            'Ctrl+1: Dashboard | Ctrl+,: Settings | Ctrl+F: Search\n'
+            'Ctrl++ / Ctrl+-: Text Size | Ctrl+Shift+R: Read Focus\n'
+            'Ctrl+Shift+S: Stop Speech | F11: Full Screen | Esc: Windowed\n'
+            'Passwords are excluded from speech. Click the eye to show or hide a password.',
+            bg=SURFACE,fg=MUTED,justify='left',wraplength=width-40).pack(fill='x',padx=20,pady=8)
+        def save():
+            values={key:var.get() for key,var in vars.items()};values['text_size']=int(values['text_size'].rstrip('%'))
+            win.destroy();self.save_accessibility(values)
+        footer=tk.Frame(win,bg=SURFACE);footer.pack(side='bottom',fill='x',padx=20,pady=12,before=holder)
+        footer.columnconfigure((0,1),weight=1,uniform='access')
+        action_button(footer,'Cancel',win.destroy,primary=False).grid(row=0,column=0,sticky='ew',padx=3)
+        action_button(footer,'Save',save).grid(row=0,column=1,sticky='ew',padx=3)
+        present_popup(win,self)
+        if popup_exists(win):win.grab_set()
+
+    def quick_actions(self):
+        defaults=[('My profile','My profile'),('Loyalty program','Loyalty')]
+        if self.user['role']!='Customer':
+            defaults += [('Browse recipes','Recipes'),('Manage inventory','Inventory'),('Customer orders','Orders')]
+            if self.user['role']=='Owner':defaults += [('Accounting','Accounting'),('Payroll','Payroll')]
+            defaults += [('Trends','Trends'),('Feedback','Feedback')]
+        return self.preferences.quick_actions(self.user['userID'],defaults)
+
+    def reorder_quick_actions(self):
+        win=tk.Toplevel(self);win.withdraw();win.title('Reorder Quick Actions');win.configure(bg=SURFACE);win.transient(self)
+        entries=self.quick_actions()
+        tk.Label(win,text='Select An Action, Then Move It Up Or Down',bg=SURFACE,fg=INK).pack(fill='x',pady=12)
+        listing=tk.Listbox(win,exportselection=False,bg=ENTRY,fg=INK,selectbackground=SELECTED,selectforeground=INK,font=(FONT,12),height=10,
+                           bd=0,highlightthickness=2,highlightbackground=BORDER,highlightcolor=ACCENT)
+        listing.pack(fill='both',expand=True,padx=15)
+        def redraw(index=0):
+            listing.delete(0,'end')
+            for label,_ in entries:listing.insert('end',title_label(label))
+            listing.selection_set(index);listing.activate(index);listing.see(index)
+        def move(offset):
+            selection=listing.curselection()
+            if not selection:return
+            i=selection[0];j=max(0,min(len(entries)-1,i+offset))
+            entries[i],entries[j]=entries[j],entries[i];redraw(j)
+        def save():
+            self.preferences.save(self.user['userID'],quick_actions=[page for _,page in entries]);win.destroy()
+            self.show_success('Quick action order saved.')
+        for label,command in [('Move Up',lambda:move(-1)),('Move Down',lambda:move(1)),('Save',save),('Cancel',win.destroy)]:
+            action_button(win,label,command,primary=(label=='Save'),small=True).pack(fill='x',padx=15,pady=4)
+        listing.bind('<Alt-Up>',lambda e:move(-1));listing.bind('<Alt-Down>',lambda e:move(1))
+        redraw();present_popup(win,self)
+        if popup_exists(win):win.grab_set();listing.focus_set()
+
     def _style(self):
         style = ttk.Style(self)
         if style.theme_use()!='clam':style.theme_use('clam')
         style.configure('POS.Treeview', font=(FONT, 10), rowheight=34, background=SURFACE,
-                        fieldbackground=SURFACE, foreground=INK, borderwidth=0)
+                        fieldbackground=SURFACE, foreground=INK, borderwidth=0,
+                        bordercolor=SURFACE,lightcolor=SURFACE,darkcolor=SURFACE,padding=1)
+        if 'Shop.Treeview.field' not in style.element_names():
+            style.element_create('Shop.Treeview.field','from','default','background')
+        style.layout('POS.Treeview',[('Shop.Treeview.field',{'sticky':'nswe','children':[
+            ('Treeview.padding',{'sticky':'nswe','children':[('Treeview.treearea',{'sticky':'nswe'})]})]})])
         style.configure('POS.Treeview.Heading', font=(FONT, 10, 'bold'),
                         background=HEADING, foreground=INK, relief='flat', padding=8)
         style.map('POS.Treeview', background=[('selected', SELECTED)],
-                  foreground=[('selected', INK)])
+                  foreground=[('selected', INK)],bordercolor=[('!disabled',SURFACE)],
+                  lightcolor=[('!disabled',SURFACE)],darkcolor=[('!disabled',SURFACE)])
+        style.map('POS.Treeview.Heading',background=[('!disabled',HEADING)],foreground=[('!disabled',INK)])
         style.configure('TCombobox', padding=6, font=(FONT, 11),
                         fieldbackground=ENTRY, background=SECONDARY, foreground=INK,
                         selectbackground=ENTRY, selectforeground=INK)
         style.map('TCombobox', fieldbackground=[('readonly',ENTRY)],
                   foreground=[('readonly',INK)])
-        modern_controls(self,THEMES[self.theme_name])
+        modern_controls(self,{key:globals()[key] for key in THEMES[self.theme_name]})
 
     def clear(self):
+        self._cancel_page_request()
         self._cancel_nav_animation()
         self._shell_signature=None
         if getattr(self,'_clock_after_id',None):
@@ -596,18 +776,151 @@ class OnigiriDesktop(tk.Tk):
         return dlg.result
 
     def run_action(self, fn, *, refresh=True, success=None):
+        self.clear_success()
         try:
             if not self._authorize(getattr(self, '_action_roles', ())):
                 return None
             outcome = fn()
-            if success:
-                messagebox.showinfo('Saved', success, parent=self)
             if refresh and self.user:
                 self.show_page(self.current_page)
+            if success:
+                self.show_success(success)
             return outcome
         except (ValueError, sqlite3.Error, OSError) as exc:
+            self.clear_success()
             messagebox.showerror('Could not complete action', str(exc), parent=self)
             return None
+
+    def _mount_notice(self,parent,*,mode='login',local=False):
+        host=tk.Frame(parent,bg=LIGHT,height=100)
+        host._notice_mode=mode;host._notice_base_height=100
+        host.pack_propagate(False)
+        if mode=='header':
+            # Use the empty space beside the centred page heading. Compact
+            # windows reserve this space at layout time, never when saving.
+            spacer=tk.Frame(parent,bg=LIGHT,height=100)
+            def position(_event=None):
+                scale=self.accessibility.options['text_size']/100
+                compact=parent.winfo_width()<round(1050*scale)
+                spacer.configure(height=round(100*scale))
+                if compact and not spacer.winfo_manager():
+                    following=next((w for w in parent.winfo_children() if w not in (host,spacer,self.clock_label.master) and w.winfo_manager()=='pack'),None)
+                    spacer.pack(fill='x',**({'before':following} if following else {}))
+                elif not compact:spacer.pack_forget()
+                y=self.clock_label.winfo_rooty()+self.clock_label.winfo_height()-parent.winfo_rooty()+6
+                host.place(x=18,y=y,width=max(1,min(round(420*scale),parent.winfo_width()-36)),height=round(100*scale))
+                host.lift()
+            host._position_notice=position
+            parent.bind('<Configure>',position,add='+')
+            self.clock_label.bind('<Configure>',position,add='+')
+            position()
+        else:host.pack(fill='x')
+        if local:parent._notice_host=host
+        else:self.notice_host=host
+        def resize(_event=None):
+            for bar in host.winfo_children():
+                layout=getattr(bar,'_notice_layout',None)
+                if layout:layout()
+        host.bind('<Configure>',resize,add='+')
+        if self._success_message and not local:
+            self.show_success(self._success_message,details=self._success_details,detail_label=self._success_detail_label)
+        return host
+
+    def clear_success(self):
+        self._cancel_notice_timer()
+        self._success_message=''
+        self._success_details=None
+        hosts=[getattr(self,'notice_host',None)]+[getattr(win,'_notice_host',None) for win in self.winfo_children() if isinstance(win,tk.Toplevel)]
+        for host in hosts:
+            if host is not None and host.winfo_exists():
+                for child in host.winfo_children():child.destroy()
+                if not hasattr(host,'_notice_mode'):host.pack_forget()
+
+    def show_success(self,message,*,details=None,detail_label='View Details',parent=None):
+        """Show committed changes inline, including after a page/auth refresh."""
+        self._cancel_notice_timer()
+        self._success_message=str(message)
+        self._success_details=details;self._success_detail_label=detail_label
+        host=getattr(parent,'_notice_host',None) if parent is not None else getattr(self,'notice_host',None)
+        if host is None or not host.winfo_exists():return
+        if not host.winfo_manager():
+            siblings=host.master.winfo_children()
+            following=next((w for w in siblings[siblings.index(host)+1:] if w.winfo_manager()=='pack'),None)
+            host.pack(fill='x',**({'before':following} if following is not None else {}))
+        for child in host.winfo_children():child.destroy()
+        dark=self.accessibility.options['contrast']=='High Contrast' or self.theme_name=='Midnight'
+        background,foreground,border=('#173D2A','#E1F5E8','#5B9873') if dark else ('#E8F5ED','#185C34','#ACD6BA')
+        bar=RoundedFrame(host,bg=background,highlightbackground=border,highlightthickness=1,padx=14,pady=10)
+        self._notice_bar=bar
+        bar.bind('<Destroy>',lambda e:self._cancel_notice_timer() if e.widget is bar and getattr(self,'_notice_bar',None) is bar else None,add='+')
+        label=tk.Label(bar,text=self._success_message,bg=background,fg=foreground,
+            font=(FONT,11),anchor='w',justify='left',wraplength=600)
+        actions=tk.Frame(bar,bg=background)
+        close=tk.Button(actions,text='Dismiss',command=self.clear_success,bg=background,fg=foreground,
+            activebackground=background,activeforeground=foreground,bd=0,highlightthickness=0,font=(FONT,10,'bold'),cursor='hand2',padx=8,pady=4)
+        close.pack(side='right',padx=(10,0))
+        view=None
+        if details:
+            view=tk.Button(actions,text=detail_label,command=details,bg=background,fg=foreground,
+                activebackground=background,activeforeground=foreground,bd=0,highlightthickness=0,font=(FONT,10,'bold'),cursor='hand2',padx=8,pady=4)
+            view.pack(side='right',padx=(10,0))
+        layout_state={'compact':None}
+        def layout_notice(_event=None):
+            scale=self.accessibility.options['text_size']/100
+            available=max(1,host.winfo_width())
+            header=getattr(host,'_notice_mode',None)=='header'
+            width=min(round(420*scale),available) if header else max(1,available-40)
+            compact=width<round(380*scale)
+            if layout_state['compact']!=compact:
+                label.pack_forget();actions.pack_forget()
+                label.pack(side='top' if compact else 'left',fill='x',expand=True)
+                actions.pack(side='bottom' if compact else 'right',padx=(0,0) if compact else (10,0))
+                layout_state['compact']=compact
+            text_width=max(40,width-30-(0 if compact else actions.winfo_reqwidth()+10))
+            if int(label.cget('wraplength'))!=text_width:label.configure(wraplength=text_width)
+            bar.place(x=0 if header else 20,y=4,width=width)
+        bar._notice_layout=layout_notice
+        bar.bind('<Configure>',layout_notice,add='+')
+        layout_notice()
+        self.accessibility.queue()
+        if self.accessibility.options['narration']:self.accessibility.speak(self._success_message)
+        self._notice_after=self.after(5000,lambda:self._fade_success(bar,background,foreground,border))
+
+    def _cancel_notice_timer(self):
+        pending=getattr(self,'_notice_after',None)
+        if pending is not None:self.after_cancel(pending)
+        self._notice_after=None
+
+    def _fade_success(self,bar,background,foreground,border):
+        self._notice_after=None
+        if not bar.winfo_exists():return
+        if self.reduced_motion:
+            self.clear_success();return
+        target=bar.master.cget('bg')
+        started=perf_counter()
+        def blend(color,progress):
+            start=self.winfo_rgb(color);end=self.winfo_rgb(target)
+            return '#'+''.join(f'{round((a+(b-a)*progress)/257):02x}' for a,b in zip(start,end))
+        def step():
+            self._notice_after=None
+            if not bar.winfo_exists():return
+            progress=min(1,(perf_counter()-started)/.3)
+            if progress>=1:
+                self.clear_success();return
+            amount=progress*progress*(3-2*progress)
+            bg=blend(background,amount);fg=blend(foreground,amount)
+            bar.configure(bg=bg);bar._surface_border=blend(border,amount);bar._draw_surface()
+            children=list(bar.winfo_children())
+            for frame in tuple(children):
+                if isinstance(frame,tk.Frame) and not getattr(frame,'_decoration',False):
+                    frame.configure(bg=bg);children.extend(frame.winfo_children())
+            for child in children:
+                if isinstance(child,(tk.Label,tk.Button)):
+                    child.configure(bg=bg,fg=fg)
+                    if isinstance(child,tk.Button):child.configure(activebackground=bg,activeforeground=fg)
+                    if isinstance(child,tk.Button):self._rounding.apply(child)
+            self._notice_after=self.after(16,step)
+        step()
 
     def _authorize(self, roles=()):
         """Revalidate the session even if an account changed while a form was open."""
@@ -642,6 +955,7 @@ class OnigiriDesktop(tk.Tk):
 
     def show_auth(self):
         """Centered start screen; hide decorative panel when the window narrows."""
+        self.clear_success()
         self.user = None
         # The welcome/login screen has no appearance controls and always uses Classic.
         # Each user-specific theme is applied after successful login.
@@ -663,6 +977,7 @@ class OnigiriDesktop(tk.Tk):
         right.pack(side='right',fill='both',expand=True)
         form=tk.Frame(right,bg=LIGHT)
         form.place(relx=.5,rely=.5,anchor='center',relwidth=.98)
+        self._mount_notice(form)
         tk.Label(form,text='Welcome back',bg=LIGHT,fg=INK,
                  font=(FONT,27,'bold'),justify='center').pack(fill='x')
         has_logins=self.svc.has_logins()
@@ -681,9 +996,10 @@ class OnigiriDesktop(tk.Tk):
             for label,var,hidden in [('Username',user_var,False),('Password',pass_var,True)]:
                 tk.Label(form,text=label,bg=LIGHT,fg=INK,font=(FONT,10,'bold'),
                          justify='center').pack(fill='x',pady=(7,6))
-                field=tk.Entry(form,textvariable=var,font=(FONT,12),relief='solid',bd=1,
-                               justify='center',bg=SURFACE,fg=INK,show='•' if hidden else '')
-                field.pack(fill='x',ipady=7)
+                field=(password_entry(form,var,bg=SURFACE,fg=INK) if hidden else
+                       ttk.Entry(form,textvariable=var,font='ShopDropdownFont',style='Search.TEntry',justify='center'))
+                field.pack(fill='x')
+                (field.entry if hidden else field).accessible_name=label
                 if not hidden:field.focus_set()
             def login():
                 try:
@@ -695,6 +1011,7 @@ class OnigiriDesktop(tk.Tk):
             action_button(form,'Log in  →',login).pack(fill='x',pady=(15,8))
             self.bind('<Return>',lambda _e:login())
         action_button(form,'Exit Application',self.exit_application,primary=False).pack(fill='x',pady=(14,0))
+        action_button(form,'Accessibility',self.accessibility_dialog,primary=False,small=True).pack(fill='x',pady=(8,0))
         tk.Label(form,text='F11: full screen  ·  Esc: windowed mode',bg=LIGHT,fg=MUTED,
                  font=(FONT,9),justify='center').pack(fill='x',pady=(10,0))
         def resize_auth(event):
@@ -729,14 +1046,35 @@ class OnigiriDesktop(tk.Tk):
             user_id = self.svc.create_user(result['name'], result['username'], result['password'],
                 role, email=result['email'] or None, phone_number=result['phone'] or None,
                 date_of_birth=result['dob'] or None)
-            messagebox.showinfo('Account created', f'Your {role} account is ready (user #{user_id}).\nPlease log in.', parent=self)
             self.show_auth()
+            self.show_success(f'Your {role} account is ready (user #{user_id}). Please log in.')
         try:
             submit()
         except (ValueError, sqlite3.Error, OSError) as exc:
             messagebox.showerror('Could not create account', str(exc), parent=self)
 
+    def _cancel_page_request(self):
+        pending=getattr(self,'_page_after',None)
+        if pending is not None:self.after_cancel(pending)
+        self._page_after=None
+
+    def navigate(self,page):
+        """Respond to navigation immediately, before running page queries."""
+        self._cancel_page_request()
+        if not self.user or not getattr(self,'_shell_signature',None):
+            return self.show_page(page)
+        if page not in self.allowed_pages():return
+        for name,button in self.footer_buttons.items():
+            color=ACCENT if name==page else SIDE_BUTTON
+            button_colors(button,color)
+        self._animate_navigation(page)
+        def load():
+            self._page_after=None
+            self.show_page(page)
+        self._page_after=self.after(0 if self.reduced_motion else 125,load)
+
     def show_page(self, page):
+        self._cancel_page_request()
         if not self.user:
             self.show_auth()
             return
@@ -752,11 +1090,9 @@ class OnigiriDesktop(tk.Tk):
             self.trend_results=None
             self.header_title.config(text=title_label(page))
             for name,button in self.nav_buttons.items():
-                button.config(bg=DARK)
-                button._normal_bg=button.cget('bg')
+                button_colors(button,DARK)
             for name,button in self.footer_buttons.items():
-                button.config(bg=ACCENT if name==page else SIDE_BUTTON)
-                button._normal_bg=button.cget('bg')
+                button_colors(button,ACCENT if name==page else SIDE_BUTTON)
             self.page_canvas.yview_moveto(0)
             self._render_current_page()
             self._animate_navigation(page)
@@ -776,6 +1112,7 @@ class OnigiriDesktop(tk.Tk):
         nav_shell = tk.Frame(sidebar, bg=DARK)
         nav_shell.pack(fill='both', expand=True)
         nav_canvas = tk.Canvas(nav_shell, bg=DARK, highlightthickness=0, bd=0)
+        self.nav_canvas=nav_canvas
         nav_scroll = AutoScrollbar(nav_shell, orient='vertical', command=nav_canvas.yview)
         nav_items = tk.Frame(nav_canvas, bg=DARK)
         item_window = nav_canvas.create_window((0, 0), window=nav_items, anchor='nw')
@@ -801,19 +1138,20 @@ class OnigiriDesktop(tk.Tk):
                                fg=SIDE_TEXT,
                                activebackground=SIDE_HOVER, activeforeground='white',
                                padx=17, pady=7, font=(FONT, 10),
-                               command=lambda p=name:self.show_page(p))
+                               command=lambda p=name:self.navigate(p))
             button.pack(fill='x')
             hover_button(button)
             self.nav_buttons[name] = button
             button.bind('<MouseWheel>', scroll_nav)
             button.bind('<Button-4>', scroll_nav)
             button.bind('<Button-5>', scroll_nav)
-        self.nav_indicator=tk.Frame(nav_items,bg=ACCENT)
+        self.nav_indicator=RoundedFrame(nav_items,bg=ACCENT,radius=6)
         # The moving canvas clips stationary bold copies of the menu labels.
         # Only the highlight moves: text keeps its position in the sidebar.
         self.nav_highlight=tk.Canvas(self.nav_indicator,bg=ACCENT,bd=0,
             highlightthickness=0,takefocus=False,cursor='hand2')
         self.nav_highlight.pack(fill='both',expand=True)
+        self.nav_indicator._round_hit_target=self.nav_highlight
         self.nav_text_ids={name:self.nav_highlight.create_text(17,0,text=title_label(name),
             anchor='w',fill='white',font=(FONT,10,'bold')) for name in self.nav_buttons}
         self.nav_highlight.bind('<Button-1>',self._click_nav_highlight)
@@ -827,11 +1165,31 @@ class OnigiriDesktop(tk.Tk):
         tk.Label(sidebar, text=f"{self.user['name'].upper()}\n{self.user['role']} | {self.user['username']}",
                  justify='center', bg=DARK, fg=SIDE_MUTED, font=(FONT,10), pady=12).pack(fill='x')
         self.footer_buttons={}
-        for name in ('My profile','Settings'):
-            footer_button=tk.Button(sidebar,text=title_label(name),command=lambda p=name:self.show_page(p),
-                bg=ACCENT if page==name else SIDE_BUTTON,fg='white',bd=0,
-                font=(FONT,11,'bold'),pady=12)
-            footer_button.pack(fill='x',padx=12,pady=5);hover_button(footer_button);self.footer_buttons[name]=footer_button
+        profile=tk.Button(sidebar,text='My Profile',command=lambda:self.navigate('My profile'),
+            bg=ACCENT if page=='My profile' else SIDE_BUTTON,fg='white',bd=0,highlightthickness=0,
+            font=(FONT,11,'bold'),pady=12)
+        profile.pack(fill='x',padx=12,pady=(0,10));hover_button(profile)
+        self.footer_buttons['My profile']=profile
+        icon_row=tk.Frame(sidebar,bg=DARK)
+        icon_row.pack(fill='x',padx=12,pady=(0,10))
+        icon_row.columnconfigure((0,1),weight=1,uniform='footer')
+        if not getattr(self,'_footer_images',None):
+            self._footer_images={name:tk.PhotoImage(master=self,file=resource(name.lower()+'.png'))
+                                 for name in ('Accessibility','Settings')}
+        for column,name in enumerate(('Accessibility','Settings')):
+            button=tk.Button(icon_row,image=self._footer_images[name],text='',
+                command=self.accessibility_dialog if name=='Accessibility' else lambda:self.navigate('Settings'),
+                bg=ACCENT if page==name else SIDE_BUTTON,fg='white',bd=0,highlightthickness=0,
+                height=profile.winfo_reqheight(),padx=0,pady=0,takefocus=True,cursor='hand2')
+            button.accessible_name=name
+            button.bind('<Return>',lambda event,b=button:(b.invoke(),'break')[1])
+            button.grid(row=0,column=column,sticky='ew',padx=(0,5) if column==0 else (5,0))
+            hover_button(button);self.footer_buttons[name]=button
+        def size_footer(event):
+            for name in ('Accessibility','Settings'):
+                button=self.footer_buttons[name]
+                if int(button.cget('height'))!=event.height:button.configure(height=event.height)
+        profile.bind('<Configure>',size_footer,add='+')
         container = tk.Frame(base, bg=LIGHT)
         container.pack(side='left', fill='both', expand=True)
         top = tk.Frame(container, bg=LIGHT, padx=18, pady=11)
@@ -848,6 +1206,7 @@ class OnigiriDesktop(tk.Tk):
         account_actions.grid(row=0,column=2,sticky='e')
         action_button(account_actions,'Log out',self.show_auth,primary=False,small=True).pack(side='left',padx=(0,8))
         action_button(account_actions,'Exit',self.exit_application,primary=False,small=True).pack(side='left')
+        self._mount_notice(container,mode='header')
         # The page itself scrolls. Buttons, summaries and tables cannot disappear
         # underneath the bottom edge on shorter laptop and tablet-size windows.
         page_shell=tk.Frame(container,bg=LIGHT)
@@ -866,6 +1225,7 @@ class OnigiriDesktop(tk.Tk):
         self.page_canvas.bind('<Button-5>',lambda _e:scroll_if_needed(self.page_canvas,2))
         self._shell_signature=signature
         self._render_current_page()
+        self._reveal_navigation(page)
 
     def _cancel_nav_animation(self):
         pending=getattr(self,'_nav_after',None)
@@ -880,16 +1240,28 @@ class OnigiriDesktop(tk.Tk):
         if not target:
             indicator.place_forget();return
         self.update_idletasks()
+        self._reveal_navigation(page)
         start=indicator.winfo_y() if indicator.winfo_ismapped() else target.winfo_y()
         end=target.winfo_y()
         started=perf_counter()
         def step():
             self._nav_after=None
-            progress=min(1,(perf_counter()-started)/.11)
+            progress=1 if getattr(self,'reduced_motion',False) else min(1,(perf_counter()-started)/.11)
             fraction=progress*progress*(3-2*progress)
             self._position_nav_highlight(round(start+(end-start)*fraction),target.winfo_height())
             if progress<1:self._nav_after=self.after(8,step)
         step()
+
+    def _reveal_navigation(self,page):
+        target=self.nav_buttons.get(page)
+        if not target:return
+        self.update_idletasks()
+        canvas=self.nav_canvas
+        total=max(1,target.master.winfo_reqheight())
+        top=canvas.canvasy(0); bottom=top+canvas.winfo_height()
+        y=target.winfo_y(); end=y+target.winfo_height()
+        if y<top:canvas.yview_moveto(y/total)
+        elif end>bottom:canvas.yview_moveto(max(0,end-canvas.winfo_height())/total)
 
     def _position_nav_highlight(self,top,height):
         self.nav_indicator.place(x=0,y=top,relwidth=1,height=height)
@@ -902,7 +1274,7 @@ class OnigiriDesktop(tk.Tk):
         y=self.nav_indicator.winfo_y()+event.y
         for name,button in self.nav_buttons.items():
             if button.winfo_y()<=y<button.winfo_y()+button.winfo_height():
-                self.show_page(name)
+                self.navigate(name)
                 break
         return 'break'
 
@@ -937,7 +1309,7 @@ class OnigiriDesktop(tk.Tk):
         canvas=getattr(self,'page_canvas',None)
         if not canvas or not canvas.winfo_exists():return
         if not str(event.widget).startswith(str(canvas)+'.'):return
-        if isinstance(event.widget,(ttk.Treeview,ttk.Combobox,tk.Text,tk.Entry)):return
+        if isinstance(event.widget,(ttk.Treeview,ttk.Combobox,ttk.Entry,tk.Text,tk.Entry)):return
         up=getattr(event,'delta',0)>0 or getattr(event,'num',0)==4
         return scroll_if_needed(canvas,-2 if up else 2)
 
@@ -952,6 +1324,9 @@ class OnigiriDesktop(tk.Tk):
             self._clock_after_id=self.after(1000,self._tick_clock)
 
     def destroy(self):
+        self._cancel_page_request()
+        self._cancel_notice_timer()
+        if hasattr(self,'accessibility'):self.accessibility.close()
         self._cancel_nav_animation()
         if getattr(self,'_clock_after_id',None):
             self.after_cancel(self._clock_after_id)
@@ -979,10 +1354,10 @@ class OnigiriDesktop(tk.Tk):
             text.pack(fill='x',pady=(0,7))
             heading.bind('<Configure>',lambda e:text.configure(wraplength=max(180,e.width-22)))
         actions=buttons or []
-        if not actions:return
+        if not actions:return []
         panel=tk.Frame(heading,bg=LIGHT)
         panel.pack(fill='x',pady=(8,7))
-        widgets=[action_button(panel,label,callback,primary=(i==0),small=True)
+        widgets=[action_button(panel,label,callback,primary=((i==0 and label!='Restore backup') or label=='Factory reset'),small=True,danger=(label=='Factory reset'))
                  for i,(label,callback) in enumerate(actions)]
         state={'cols':None}
         def reflow(event=None):
@@ -995,6 +1370,7 @@ class OnigiriDesktop(tk.Tk):
             for i,b in enumerate(widgets):
                 b.grid(row=i//cols,column=i%cols,sticky='ew',padx=4,pady=4)
         panel.bind('<Configure>',reflow)
+        return widgets
 
     def table(self, rows, cols, *, height=12, parent=None, **options):
         """Filter, sort, and horizontally scroll every management table.
@@ -1004,6 +1380,8 @@ class OnigiriDesktop(tk.Tk):
         """
         wrap=card(parent or self.body,12)
         wrap.pack(fill='x',pady=(0,14))
+        original_cols=cols
+        cols=[(key,title_label(title)) for key,title in cols]
         keys=[key for key,_ in cols]
         if not keys:
             tk.Label(wrap,text='No records yet.',font=(FONT,11),bg=SURFACE,
@@ -1017,8 +1395,8 @@ class OnigiriDesktop(tk.Tk):
         controls=tk.Frame(toolbar,bg=SURFACE)
         controls.pack(fill='x')
         query=tk.StringVar()
-        filter_var=tk.StringVar(value='All columns')
-        sort_var=tk.StringVar(value=options.get('sort_by',cols[0][1]))
+        filter_var=tk.StringVar(value='All Columns')
+        sort_var=tk.StringVar(value=title_label(options.get('sort_by',cols[0][1])))
         direction=tk.StringVar(value=options.get('direction','Ascending'))
         status_field=next((k for k in ('status','transactionType','role','isActive') if k in keys),None)
         contracts={
@@ -1038,7 +1416,7 @@ class OnigiriDesktop(tk.Tk):
             entity='records'
         status=tk.StringVar(value='All')
         def label(parent,text):
-            tk.Label(parent,text=text,bg=SURFACE,fg=MUTED,font=(FONT,9,'bold'),
+            tk.Label(parent,text=title_label(text),bg=SURFACE,fg=MUTED,font=(FONT,9,'bold'),
                      justify='center').pack(fill='x',pady=(0,3))
         filter_groups=[]
         def input_group(text,widget):
@@ -1046,9 +1424,13 @@ class OnigiriDesktop(tk.Tk):
             filter_groups.append(box)
             label(box,text)
             widget(box).pack(fill='both',expand=True)
-        input_group('Search',lambda p:tk.Entry(p,textvariable=query,justify='center',
-             font=(FONT,10),relief='solid',bd=1))
-        input_group('Search in',lambda p:SmoothCombobox(p,values=['All columns']+[v for _,v in cols],
+        def search_input(parent):
+            entry=ttk.Entry(parent,textvariable=query,justify='center',font='ShopDropdownFont',style='Search.TEntry')
+            entry.accessible_name='Search'
+            if parent is not None:self.search_entry=entry
+            return entry
+        input_group('Search',search_input)
+        input_group('Search in',lambda p:SmoothCombobox(p,values=['All Columns']+[v for _,v in cols],
              textvariable=filter_var,state='readonly',width=13))
         input_group('Sort by',lambda p:SmoothCombobox(p,values=[v for _,v in cols],
              textvariable=sort_var,state='readonly',width=12))
@@ -1097,12 +1479,14 @@ class OnigiriDesktop(tk.Tk):
         table_hover(tree)
         vertical=AutoScrollbar(holder,command=tree.yview,orient='vertical')
         horizontal=AutoScrollbar(holder,command=tree.xview,orient='horizontal')
-        tree.configure(yscrollcommand=vertical.set,xscrollcommand=horizontal.set)
+        tree.configure(yscrollcommand=rounded_scroll(tree,vertical),xscrollcommand=rounded_scroll(tree,horizontal))
         holder.columnconfigure(0,weight=1);holder.rowconfigure(0,weight=1)
         vertical.grid(row=0,column=1,sticky='ns')
         horizontal.grid(row=1,column=0,sticky='ew')
         tree.grid(row=0,column=0,sticky='nsew')
-        title_to_key={title:key for key,title in cols}
+        title_to_key={title:key for key,title in original_cols}
+        title_to_key.update({title:key for key,title in cols})
+        tree.records={}
         def sort_key(row,key):
             value=row.get(key)
             if value is None:return (2,'')
@@ -1121,8 +1505,10 @@ class OnigiriDesktop(tk.Tk):
                        or format_table_value(status_field,r.get(status_field,''))==status.get())]
             data.sort(key=lambda r:sort_key(r,sort),reverse=(direction.get()=='Descending'))
             tree.delete(*tree.get_children())
+            tree.records={}
             for row in data:
-                tree.insert('','end',values=[format_table_value(k,row.get(k)) for k in keys])
+                iid=tree.insert('','end',values=[format_table_value(k,row.get(k)) for k in keys])
+                tree.records[iid]=row
             total_label.config(text=f'Showing {len(data)} of {len(dataset)} records')
             if not data:
                 selected=status.get()
@@ -1149,11 +1535,19 @@ class OnigiriDesktop(tk.Tk):
             values=tree.item(selected[0],'values')
             if parent is None and self.user['role']!='Customer' and self.current_page in ('Recipes','Orders','Suppliers','Purchase orders','Loyalty'):
                 self.open_record(self.current_page,values[0])
+            elif parent is None and self.current_page=='Users':
+                row=tree.records[selected[0]]
+                role=row['role']; key={'Customer':'customerID','Owner':'ownerID','Employee':'employeeID'}[role]
+                content={k:v for k,v in row.items() if k not in ('customerID','ownerID','employeeID')}
+                content[key]=row.get(key)
+                self.details_dialog('Full record details','\n'.join(f'{title_label(k)}: {v if v is not None else "Not recorded"}' for k,v in content.items()))
             else:self.details_dialog('Full record details', '\n'.join(f'{title}: {values[i]}' for i,(_,title) in enumerate(cols)))
         tree.bind('<Double-1>',show_detail)
+        tree.bind('<Return>',show_detail)
         self.data_tree=tree
         self.table_controls={'query':query,'column':filter_var,'sort':sort_var,
                              'direction':direction,'status':status}
+        tree.dataset=dataset;tree.redraw=redraw
         return tree
 
     def selected_id(self) -> str:
@@ -1226,22 +1620,16 @@ class OnigiriDesktop(tk.Tk):
         if self.user['role'] in ('Owner','Employee'):
             count=len(self.feedback.view_feedback(self.user['userID'],status='Submitted'))
             self.feedback_badge=action_button(self.body,f'\U0001f514 Feedback ({count} awaiting review)',
-                lambda:self.show_page('Feedback'),primary=False,small=True)
-            self.feedback_badge.pack(fill='x',pady=(0,12))
+                lambda:self.navigate('Feedback'),primary=False,small=True)
+            self.feedback_badge.pack(fill='x',padx=6,pady=(0,12))
         panel = card(self.body, 26)
-        panel.pack(fill='x')
+        panel.pack(fill='x',padx=6)
         tk.Label(panel, text='QUICK ACTIONS', bg=SURFACE, fg=MUTED,
                  font=(FONT, 10, 'bold'), anchor='center', justify='center').pack(fill='x', pady=(0,15))
-        shortcuts = [('My profile', 'My profile'),('Loyalty program','Loyalty')]
-        if self.user['role'] != 'Customer':
-            shortcuts += [('Browse recipes','Recipes')]
-            shortcuts += [('Manage inventory','Inventory'),('Customer orders','Orders')]
-            if self.user['role']=='Owner':
-                shortcuts += [('Accounting','Accounting'),('Payroll','Payroll')]
-            shortcuts += [('Trends','Trends'),('Feedback','Feedback')]
+        shortcuts = self.quick_actions()
         action_grid=tk.Frame(panel,bg=SURFACE)
         action_grid.pack(fill='x')
-        quick_buttons=[action_button(action_grid,label,lambda p=page:self.show_page(p),
+        quick_buttons=[action_button(action_grid,label,lambda p=page:self.navigate(p),
                                      primary=False,small=True) for label,page in shortcuts]
         quick_layout={'cols':None}
         def reflow_quick(e):
@@ -1287,7 +1675,7 @@ class OnigiriDesktop(tk.Tk):
         a=self.ask('Adjust inventory',[('id','Ingredient ID',self.selected_id(),'text'),('mode','Action','add','choice',['add','remove']),
           ('qty','Quantity','','text'),('note','Reason (optional)','','text'),
           ('amount','Accounting value CAD (optional)','','text')],
-          'Leave the value blank for a quantity-only adjustment. No price is assumed.')
+          'Leave the value blank for a quantity-only adjustment. No price is assumed.',focus='qty' if self.selected_id() else 'id')
         if a:
             def save():
                 self.svc.adjust_stock(a['id'],a['mode'],a['qty'],self.user['userID'],a['note'],
@@ -1298,10 +1686,11 @@ class OnigiriDesktop(tk.Tk):
 
     @requires_role('Owner', 'Employee')
     def receive_stock(self):
-        a=self.ask('Receive supplier delivery',[('id','Ingredient ID','','text'),('qty','Quantity received','','text'),
+        selected=self.selected_id() if self.current_page=='Inventory' else ''
+        a=self.ask('Receive supplier delivery',[('id','Ingredient ID',selected,'text'),('qty','Quantity received','','text'),
            ('supplier','Supplier ID (optional)','','text'),('order','Purchase order ID (optional)','','text'),
            ('amount','Invoice amount CAD (optional)','','text'),('reference','Invoice reference (optional)','','text')],
-           'Receive one ingredient per action. Enter only the invoice value for this receipt; do not repeat a full invoice on each line.')
+           'Receive one ingredient per action. Enter only the invoice value for this receipt; do not repeat a full invoice on each line.',focus='qty' if selected else 'id')
         if a:
             self.run_action(lambda:self.svc.receive_delivery({_ident(a['id'], 'Ingredient ID'):a['qty']},self.user['userID'],
                   supplier_id=_ident(a['supplier'], 'Supplier ID') if a['supplier'] else None,
@@ -1368,7 +1757,7 @@ class OnigiriDesktop(tk.Tk):
             def call():
                 cid=role_id(self.db_path,customer['cid'],'Customer') if customer['cid'] else None
                 ident=self.svc.create_customer_order(dialog.result,self.user['userID'],cid)
-                messagebox.showinfo('Order created',f'Order #{ident} was created as Pending.',parent=self)
+                self.show_success(f'Order #{ident} was created as Pending.')
             self.run_action(call)
 
     @requires_role('Owner', 'Employee')
@@ -1425,15 +1814,17 @@ class OnigiriDesktop(tk.Tk):
                        f'Points: {quote.previous_balance} - {quote.points_redeemed} + {quote.points_earned} = {quote.new_balance}',parent=self):return
                     result=self.loyalty.complete_order_with_loyalty(self.user['userID'],cid,order_id,reward_id=reward)
                     self.show_page(self.current_page)
-                    self.details_dialog('Order complete',self.loyalty.generate_receipt(result['loyaltyTransactionID']))
+                    receipt=self.loyalty.generate_receipt(result['loyaltyTransactionID'])
+                    self.show_success('Order completed. Inventory, loyalty and the net Sale were saved.',
+                        details=lambda:self.details_dialog('Order receipt',receipt),detail_label='View Receipt')
                     return
             if messagebox.askyesno('Confirm order',
                     f'Complete order #{order_id} and deduct inventory? Customer loyalty is not applied.',parent=self):
                 result=self.svc.complete_customer_order(order_id,self.user['userID'])
                 self.show_page(self.current_page)
-                messagebox.showinfo('Order complete','Inventory deducted. ' +
+                self.show_success('Inventory deducted. ' +
                     ('Sale posted to accounting.' if result.get('accounting_transaction_id') else
-                     'No financial Sale was posted for this zero-value order.'),parent=self)
+                     'No financial Sale was posted for this zero-value order.'))
         self.run_action(complete,refresh=False)
 
     @requires_role('Owner', 'Employee')
@@ -1452,7 +1843,7 @@ class OnigiriDesktop(tk.Tk):
     def page_suppliers(self):
         self.section('Suppliers','Contact directory for ingredient deliveries',[
             ('+ New supplier',self.add_supplier),('Receive delivery',self.receive_stock),('Set supplied ingredient',self.supplier_catalogue),
-            ('View supplied ingredients',self.view_supplier_ingredients)])
+            ('View supplied ingredients',self.view_supplier_ingredients),('Modify supplier details',self.modify_supplier)])
         self.table(self.svc.suppliers(),[('supplierID','Supplier ID'),('name','Name'),('contactInfo','Contact')])
 
     @requires_role('Owner', 'Employee')
@@ -1469,6 +1860,22 @@ class OnigiriDesktop(tk.Tk):
         a=self.ask('New supplier',[('name','Supplier name','','text'),('contact','Contact information','','text')])
         if a:self.run_action(lambda:self.svc.add_supplier(a['name'],a['contact']),success='Supplier saved.')
 
+    @requires_role('Owner','Employee')
+    def modify_supplier(self):
+        suppliers=self.svc.suppliers()
+        if not suppliers:
+            messagebox.showinfo('No suppliers','Add a supplier first.',parent=self);return
+        sid=self.selected_id()
+        if not sid:
+            choices=[f"{r['supplierID']}: {r['name']}" for r in suppliers]
+            selected=self.ask('Choose supplier',[('supplier','Supplier',choices[0],'choice',choices)])
+            if not selected:return
+            sid=selected['supplier'].split(':')[0]
+        row=next(r for r in suppliers if str(r['supplierID'])==sid)
+        a=self.ask('Modify supplier details',[('name','Supplier name',row['name'],'text'),
+                   ('contact','Contact information',row['contactInfo'] or '','text')])
+        if a:self.run_action(lambda:self.svc.update_supplier(sid,a['name'],a['contact'],user_id=self.user['userID']),success='Supplier updated.')
+
     @requires_role('Owner', 'Employee')
     def page_purchases(self):
         self.section('Purchase orders','Supplier purchase orders and outstanding quantities',[
@@ -1481,7 +1888,7 @@ class OnigiriDesktop(tk.Tk):
         if open_only:rows=[r for r in rows if r['status'] in ('Confirmed','Partially Received')]
         if not rows:
             messagebox.showinfo('No purchase orders','No open purchase orders to receive.' if open_only else 'Create a purchase order first.',parent=self);return None
-        choices=[f"{r['inventoryOrderID']}: {r['status']} ? {r['notes']}" for r in rows]
+        choices=[f"{r['inventoryOrderID']}: {r['status']} | {r['notes']}" for r in rows]
         selected=next((v for v in choices if v.split(':')[0]==self.selected_id()),choices[0])
         a=self.ask('Select purchase order',[('order','Purchase order',selected,'choice',choices)],confirm='Open')
         return int(a['order'].split(':')[0]) if a else None
@@ -1497,7 +1904,7 @@ class OnigiriDesktop(tk.Tk):
         if pid is None:return
         summary,lines,_=DetailService(self.db_path).purchase(pid)
         if not messagebox.askyesno('Receive purchase order',f'Receive items for PO #{pid} from {summary["supplier"]}?',parent=self):return
-        fields=[(str(r['ingredientID']),f"{r['ingredientName']} ? outstanding {r['remaining']:g} {r['unit']}",'0','text') for r in lines if r['remaining']>0]
+        fields=[(str(r['ingredientID']),f"{r['ingredientName']} | Outstanding {r['remaining']:g} {r['unit']}",'0','text') for r in lines if r['remaining']>0]
         fields += [('amount','Invoice amount CAD (optional)','','text'),('reference','Invoice reference (optional)','','text')]
         a=self.ask('Record partial or full delivery',fields,'Enter received quantities; leave zero for items not delivered. One invoice covers this receipt.')
         if not a:return
@@ -1550,7 +1957,8 @@ class OnigiriDesktop(tk.Tk):
         if not suppliers or not items:
             messagebox.showinfo('Setup required','Add a supplier and ingredients first.',parent=self);return
         sc=[f"{r['supplierID']}: {r['name']}" for r in suppliers];ic=[f"{r['ingredientID']}: {r['ingredientName']}" for r in items]
-        a=self.ask('Supplier ingredient catalogue',[('supplier','Supplier',sc[0],'choice',sc),('ingredient','Supplied ingredient',ic[0],'choice',ic)])
+        selected=next((v for v in sc if v.split(':')[0]==self.selected_id()),sc[0])
+        a=self.ask('Supplier ingredient catalogue',[('supplier','Supplier',selected,'choice',sc),('ingredient','Supplied ingredient',ic[0],'choice',ic)])
         if a:self.run_action(lambda:DetailService(self.db_path).set_catalogue(self.user['userID'],int(a['supplier'].split(':')[0]),int(a['ingredient'].split(':')[0])),success='Supplier catalogue updated.')
 
     @requires_role('Owner','Employee')
@@ -1575,14 +1983,17 @@ class OnigiriDesktop(tk.Tk):
             eligible=detail.eligible_customers(ident);summary['eligibleCustomers']=len(eligible)
             tabs=[('Eligible customers',eligible)]
         previous_tree=getattr(self,'data_tree',None);previous_controls=getattr(self,'table_controls',None)
-        win=tk.Toplevel(self);win.title(f'{kind} #{ident}');win.geometry('1000x700');win.configure(bg=LIGHT)
+        win=tk.Toplevel(self);win.withdraw();win.title(f'{kind} #{ident}');win.configure(bg=LIGHT)
+        center_popup(win,self,*popup_dimensions(self,1000,700))
         footer=tk.Frame(win,bg=LIGHT,height=58)
         footer.pack(side='bottom',fill='x');footer.pack_propagate(False)
         action_button(footer,'Close',win.destroy,primary=False).pack(fill='both',expand=True,padx=12,pady=8)
         notebook=ttk.Notebook(win);notebook.pack(fill='both',expand=True,padx=12,pady=12)
-        summary_tab=tk.Frame(notebook,bg=SURFACE);notebook.add(summary_tab,text='Details')
+        summary_tab=RoundedFrame(notebook,bg=SURFACE);notebook.add(summary_tab,text='Details')
         content='\n'.join(f'{title_label(k)}: {format_table_value(k,v) if v is not None else "Not recorded"}' for k,v in summary.items())
-        text=tk.Text(summary_tab,wrap='word',font=(FONT,11));text.insert('1.0',content);text.config(state='disabled');text.pack(fill='both',expand=True)
+        text=tk.Text(summary_tab,wrap='word',font=(FONT,11),bg=SURFACE,fg=INK,
+                     bd=0,highlightthickness=0,padx=12,pady=10)
+        text.insert('1.0',content);text.config(state='disabled');text.pack(fill='both',expand=True)
         # Recipe ingredients and order lines are immediately visible in the details tab.
         if tabs and kind in ('Recipes','Orders','Purchase orders'):
             text.config(height=8);text.pack_configure(expand=False)
@@ -1594,15 +2005,17 @@ class OnigiriDesktop(tk.Tk):
             if kind=='Suppliers' and 'purchase orders' in title and tree:
                 tree.bind('<Double-1>',lambda e,t=tree:self.open_record('Purchase orders',t.item(t.selection()[0],'values')[0]) if t.selection() else None)
         self.data_tree=previous_tree;self.table_controls=previous_controls
+        present_popup(win,self)
         return win
 
     @requires_role('Owner', 'Employee')
     def page_alerts(self):
-        self.section('Low-stock alerts','Ingredients reaching their reorder thresholds',[
+        buttons=self.section('Low-stock alerts','Ingredients reaching their reorder thresholds',[
             ('Update alert status',self.update_alert)])
-        self.table(self.svc.alerts(active_only=False),[('alertID','Alert ID'),
+        tree=self.table(self.svc.alerts(active_only=False),[('alertID','Alert ID'),('createdAt','Created At'),
                      ('ingredientName','Ingredient'),('quantityOnHand','On hand'),
                      ('reorderLevel','Reorder at'),('status','Status')])
+        selection_action(buttons[0],tree,lambda r:r['status']!='Closed',SECONDARY,ACCENT,INK)
 
     @requires_role('Owner', 'Employee')
     def update_alert(self):
@@ -1622,6 +2035,7 @@ class OnigiriDesktop(tk.Tk):
         """Scrollable, resizable record-details popup with an always-visible Close."""
         parent = parent or self
         win = tk.Toplevel(parent)
+        win.withdraw()
         win.title(title_label(title))
         win.configure(bg=LIGHT)
         win.transient(parent)
@@ -1634,7 +2048,7 @@ class OnigiriDesktop(tk.Tk):
         footer=tk.Frame(win,bg=LIGHT,padx=18,pady=12)
         footer.pack(fill='x',side='bottom')
         action_button(footer,'Close',win.destroy,primary=False).pack(fill='x')
-        area=tk.Frame(win,bg=SURFACE)
+        area=RoundedFrame(win,bg=SURFACE)
         area.pack(fill='both',expand=True,padx=18,pady=(4,0))
         scroll=AutoScrollbar(area,orient='vertical')
         display=tk.Text(area,wrap='word',bg=SURFACE,fg=INK,font=(FONT,11),
@@ -1644,11 +2058,13 @@ class OnigiriDesktop(tk.Tk):
         display.pack(side='left',fill='both',expand=True)
         display.insert('1.0',text)
         display.config(state='disabled')
+        present_popup(win,parent)
         return win
 
     def _records_dialog(self, title, rows):
         """Scrollable details window; every full value can be opened by double-click."""
         win=tk.Toplevel(self)
+        win.withdraw()
         win.title(title_label(title))
         width,height=popup_dimensions(self,1050,690)
         center_popup(win,self,width,height)
@@ -1661,13 +2077,14 @@ class OnigiriDesktop(tk.Tk):
         action_button(footer,'Close',win.destroy,primary=False).pack(fill='x')
         if not rows:
             tk.Label(win,text='No records found.',bg=LIGHT,fg=MUTED,justify='center').pack(fill='x')
+            present_popup(win,self)
             return
         keys=list(rows[0].keys())
         bar=tk.Frame(win,bg=LIGHT)
         bar.pack(fill='x',padx=20,pady=(0,10))
         tk.Label(bar,text='Search records',fg=MUTED,bg=LIGHT).pack(fill='x')
         query=tk.StringVar()
-        tk.Entry(bar,textvariable=query,justify='center').pack(fill='x')
+        ttk.Entry(bar,textvariable=query,justify='center',font='ShopDropdownFont',style='Search.TEntry').pack(fill='x')
         area=tk.Frame(win,bg=LIGHT)
         area.pack(fill='both',expand=True,padx=20,pady=(0,15))
         tree=ttk.Treeview(area,columns=keys,show='headings',style='POS.Treeview')
@@ -1682,7 +2099,7 @@ class OnigiriDesktop(tk.Tk):
         table_hover(tree)
         vs=AutoScrollbar(area,command=tree.yview,orient='vertical')
         hs=AutoScrollbar(area,command=tree.xview,orient='horizontal')
-        tree.configure(yscrollcommand=vs.set,xscrollcommand=hs.set)
+        tree.configure(yscrollcommand=rounded_scroll(tree,vs),xscrollcommand=rounded_scroll(tree,hs))
         area.columnconfigure(0,weight=1);area.rowconfigure(0,weight=1)
         vs.grid(row=0,column=1,sticky='ns')
         hs.grid(row=1,column=0,sticky='ew')
@@ -1702,6 +2119,7 @@ class OnigiriDesktop(tk.Tk):
         tree.bind('<Double-1>',details)
         query.trace_add('write',update)
         update()
+        present_popup(win,self)
 
     def page_profile(self):
         p=self.profile.view_profile(self.user['userID'])
@@ -1709,6 +2127,7 @@ class OnigiriDesktop(tk.Tk):
             ('Edit profile',lambda:self.edit_profile(p))])
         pane=card(self.body,30)
         pane.pack(fill='x')
+        tk.Label(pane,text='Profile Information',bg=SURFACE,fg=INK,font=(FONT,12,'bold'),anchor='w').pack(fill='x',pady=(0,12))
         for label,value in [('Full name',p.name),('Username',p.username+'  (read only)'),
                             ('Role',p.role+'  (read only)'),('Email',p.email or 'Not provided'),
                             ('Phone number',p.phone_number or 'Not provided'),
@@ -1718,11 +2137,10 @@ class OnigiriDesktop(tk.Tk):
             line.columnconfigure(0,weight=1,uniform='profile')
             line.columnconfigure(1,weight=2,uniform='profile')
             tk.Label(line,text=label,bg=SURFACE,fg=MUTED,font=(FONT,10),
-                     justify='center').grid(row=0,column=0,sticky='ew',padx=5)
+                     justify='left',anchor='w').grid(row=0,column=0,sticky='ew',padx=5)
             tk.Label(line,text=value,bg=SURFACE,fg=INK,font=(FONT,11,'bold'),
-                     justify='center',wraplength=470).grid(row=0,column=1,sticky='ew',padx=5)
-        tk.Label(self.body,text='Updates are validated and saved to both User and Profile records.',
-                 font=(FONT,10),bg=LIGHT,fg=MUTED,justify='center').pack(fill='x',pady=16)
+                     justify='left',anchor='w',wraplength=470).grid(row=0,column=1,sticky='ew',padx=5)
+            tk.Frame(pane,bg=BORDER,height=1).pack(fill='x')
 
     def edit_profile(self, p):
         a=self.ask('Edit your profile',[('name','Full name',p.name,'text'),
@@ -1852,8 +2270,8 @@ class OnigiriDesktop(tk.Tk):
             pane.bind('<Configure>',lambda e,w=label:w.configure(wraplength=max(180,e.width-35)))
             action_button(pane,'Run '+title,handler,small=True).pack(fill='x',padx=20,pady=(4,0))
         self.section('Reset and restore','These actions replace the entire active database.',[
-            ('Reset business data',lambda:self.reset_gui(False)),
-            ('Factory reset',lambda:self.reset_gui(True)),('Restore backup',self.restore_gui)])
+            ('Restore backup',self.restore_gui),('Reset business data',lambda:self.reset_gui(False)),
+            ('Factory reset',lambda:self.reset_gui(True))])
 
     def _reload_after_replace(self):
         path=self.db_path
@@ -1861,6 +2279,7 @@ class OnigiriDesktop(tk.Tk):
         self.users=UserManagementService(path);self.loyalty=LoyaltyService(path)
         self.accounting=AccountingLedger(path);self.payroll=PayrollService(path)
         self.feedback=FeedbackService(path);self.appearance=ThemePreferences(path)
+        self.preferences=DesktopPreferences(path)
         self.show_auth()
 
     @requires_role('Owner')
@@ -1870,8 +2289,8 @@ class OnigiriDesktop(tk.Tk):
         if not self._verify_owner():return
         def load():
             result=load_complete_demo(self.svc,self.user['userID'])
-            messagebox.showinfo('Complete demo', 'Already loaded; no duplicates added.' if result['already_loaded'] else
-                'Complete fictional data loaded. Safety backup: '+result['backup'],parent=self)
+            self.show_success('Already loaded; no duplicates added.' if result['already_loaded'] else
+                'Complete fictional data loaded. Safety backup: '+result['backup'])
         self.run_action(load)
 
     @requires_role('Owner')
@@ -1882,8 +2301,8 @@ class OnigiriDesktop(tk.Tk):
         if not self._verify_owner():return
         def reset():
             backup=reset_database(self.svc,self.user['userID'],with_demo=False,preserve_accounts=not factory)
-            messagebox.showinfo('Reset complete',f'Safety backup: {backup}\nSign in again or set up the first Owner.',parent=self)
             self._reload_after_replace()
+            self.show_success(f'Reset complete. Safety backup: {backup}\nSign in again or set up the first Owner.')
         self.run_action(reset,refresh=False)
 
     @requires_role('Owner')
@@ -1900,8 +2319,8 @@ class OnigiriDesktop(tk.Tk):
         def restore():
             selected=next(p for p in backups if p.name==a['backup'])
             backup=restore_database(self.svc,self.user['userID'],selected)
-            messagebox.showinfo('Restore complete',f'Current data was backed up to {backup}. Sign in using the restored accounts.',parent=self)
             self._reload_after_replace()
+            self.show_success(f'Restore complete. Current data was backed up to {backup}. Sign in using the restored accounts.')
         self.run_action(restore,refresh=False)
 
     @requires_role('Owner')
@@ -1915,9 +2334,9 @@ class OnigiriDesktop(tk.Tk):
         outcome=self.run_action(lambda:populate_accounting_activity(self.svc,self.user['userID']),
                                 refresh=False)
         if outcome is not None:
-            messagebox.showinfo('Accounting demo loaded',
+            self.show_success(
                 f"Created {outcome['manual_transactions']} sample ledger entries.\n"
-                'Open Accounting to filter, sort, and reconcile them.',parent=self)
+                'Open Accounting to filter, sort, and reconcile them.')
             self.show_page(self.current_page)
 
     @requires_role('Owner')
@@ -1947,7 +2366,7 @@ class OnigiriDesktop(tk.Tk):
             if self._verify_owner():
                 result=self.run_action(lambda:load_sample_users(self.svc,self.user['userID']),refresh=False)
                 if result is not None:
-                    messagebox.showinfo('Import completed',f"Created {result['created']} users; {result['already_present']} already existed.",parent=self)
+                    self.show_success(f"Created {result['created']} users; {result['already_present']} already existed.")
                     self.show_page('Demo & backups')
 
     @requires_role('Owner')
@@ -1958,7 +2377,7 @@ class OnigiriDesktop(tk.Tk):
     @requires_role('Owner')
     def backup_database(self):
         path=self.run_action(lambda:backup_database(self.svc),refresh=False)
-        if path is not None:messagebox.showinfo('Backup created',f'Backup stored at:\n{path}',parent=self)
+        if path is not None:self.show_success(f'Backup stored at:\n{path}')
 
     def page_loyalty(self):
         self.loyalty.ensure_sample_rewards()
@@ -2001,6 +2420,7 @@ class OnigiriDesktop(tk.Tk):
         if self.user['role']=='Owner':
             actions += [('+ Create reward',self.create_reward),('Activate / deactivate reward',self.toggle_reward),
                         ('Suspend loyalty account',self.suspend_loyalty)]
+            actions[0],actions[6]=actions[6],actions[0]
         self.section('Loyalty account actions',
                      'View, register or update customers using the options below.',actions)
         self.table(self.loyalty.rewards(active_only=False),[('rewardID','Reward ID'),('name','Reward'),
@@ -2017,10 +2437,15 @@ class OnigiriDesktop(tk.Tk):
                 result=self.loyalty.register_customer(self.user['userID'],a['name'],
                     email=a['email'] or None,phone_number=a['phone'] or None,
                     username=a['username'] or None,password=a['password'] or None)
-                messagebox.showinfo('Walk-in account created',
+                credentials=(
                     f"Customer ID: {result['customerID']}\nUser ID: {result['userID']}\n"
                     f"Username: {result['username']}\nPassword: {result['initialPassword']}\n\n"
-                    'Give these credentials to the customer. The password will not be shown again.',parent=self)
+                    'Give these credentials to the customer. The password will not be shown again.')
+                def view_credentials():
+                    self.details_dialog('Walk-in credentials',credentials)
+                    self.show_success('Walk-in account created. Credentials have been shown.')
+                self.show_success('Walk-in account created. View the credentials before dismissing this confirmation.',
+                    details=view_credentials,detail_label='View Credentials')
             self.run_action(register)
 
     @requires_role('Owner', 'Employee')
@@ -2082,7 +2507,9 @@ class OnigiriDesktop(tk.Tk):
                 else:
                     t=self.loyalty.redeem_reward(self.user['userID'],cid,oid,reward,eligible_amount=amount)
                 self.show_page(self.current_page)
-                self.details_dialog('Loyalty receipt',self.loyalty.generate_receipt(t['loyaltyTransactionID']))
+                receipt=self.loyalty.generate_receipt(t['loyaltyTransactionID'])
+                self.show_success('Loyalty points and the net Sale were saved.',
+                    details=lambda:self.details_dialog('Loyalty receipt',receipt),detail_label='View Receipt')
             self.run_action(quote,refresh=False)
 
     @requires_role('Owner')
@@ -2151,11 +2578,11 @@ class OnigiriDesktop(tk.Tk):
     def accounting_reconcile(self):
         def perform():
             result=self.accounting.reconcile_with_report()
-            messagebox.showinfo('Reconciliation',
+            self.show_success(
                 f"Reviewed {result['transactionCount']} transactions.\n"
                 f"New flags: {result['newFlags']}\nCleared flags: {result['clearedFlags']}\n"
                 f"Open discrepancies: {result['flaggedCount']}\n"
-                + ('No flags changed.' if result['newFlags']==0 and result['clearedFlags']==0 else ''),parent=self)
+                + ('No flags changed.' if result['newFlags']==0 and result['clearedFlags']==0 else ''))
         self.run_action(perform)
 
     @requires_role('Owner')
@@ -2164,15 +2591,17 @@ class OnigiriDesktop(tk.Tk):
         if rows is not None:self._records_dialog('Reconciliation history',rows)
 
     def record_browser(self,title,rows,choose,action_label,*,allow_id=False):
-        win=tk.Toplevel(self);win.title(title_label(title));win.geometry('1100x720');win.configure(bg=LIGHT)
+        win=tk.Toplevel(self);win.withdraw();win.title(title_label(title));win.configure(bg=LIGHT)
+        center_popup(win,self,*popup_dimensions(self,1100,720))
         tk.Label(win,text=title,bg=LIGHT,fg=INK,font=(FONT,16,'bold')).pack(fill='x',pady=12)
+        self._mount_notice(win,mode='popup',local=True)
         old_tree=getattr(self,'data_tree',None);old_controls=getattr(self,'table_controls',None)
         tree=self.table(rows,[(k,k) for k in rows[0]] if rows else [],parent=win)
         self.data_tree=old_tree;self.table_controls=old_controls
         identity=tk.StringVar()
         if allow_id:
             tk.Label(win,text='Select a row above or enter its Order ID below',bg=LIGHT,fg=MUTED).pack(fill='x')
-            tk.Entry(win,textvariable=identity,justify='center').pack(fill='x',padx=20)
+            ttk.Entry(win,textvariable=identity,justify='center',font='ShopDropdownFont',style='Search.TEntry').pack(fill='x',padx=20)
         def perform():
             if not self._authorize(('Owner',)):return
             raw=identity.get().strip()
@@ -2183,17 +2612,21 @@ class OnigiriDesktop(tk.Tk):
                 if not record:raise ValueError('Select a record shown in this window first.')
                 if choose(record):
                     rows.remove(record)
-                    for item in tree.get_children():
-                        if str(tree.item(item,'values')[0])==str(ident):tree.delete(item)
+                    tree.dataset.remove(record);tree.redraw()
                     identity.set('')
+                    self.show_success('Order Sale posted.' if allow_id else 'Discrepancy resolved.',parent=win)
             self.run_action(act,refresh=False)
         def close():
             win.destroy()
             if self.user:self.show_page(self.current_page)
         footer=tk.Frame(win,bg=LIGHT);footer.pack(side='bottom',fill='x',padx=16,pady=12)
-        action_button(footer,action_label,perform).pack(side='left',fill='x',expand=True)
-        action_button(footer,'Close',close,primary=False).pack(side='right',fill='x',expand=True)
+        footer.columnconfigure((0,1),weight=1,uniform='browser')
+        button=action_button(footer,action_label,perform)
+        button.grid(row=0,column=0,sticky='ew',padx=(0,4))
+        action_button(footer,'Close',close,primary=False).grid(row=0,column=1,sticky='ew',padx=(4,0))
+        if not allow_id:selection_action(button,tree,lambda r:r.get('status')=='Flagged',SECONDARY,ACCENT,INK)
         win.protocol('WM_DELETE_WINDOW',close)
+        present_popup(win,self)
         return win,perform
 
     @requires_role('Owner')
@@ -2213,7 +2646,7 @@ class OnigiriDesktop(tk.Tk):
                 'Check manual Sales first to avoid counting the same revenue twice.',parent=self):return False
             self.accounting.sync_completed_orders(allow_with_manual_sales=True,order_ids={record['orderID']})
             return True
-        return self.record_browser('Review historical order sales ? check manual Sales before posting',pending,post,'Post selected order Sale',allow_id=True)
+        return self.record_browser('Review historical order sales | check manual Sales before posting',pending,post,'Post selected order Sale',allow_id=True)
 
     @requires_role('Owner')
     def page_payroll(self):
@@ -2308,8 +2741,7 @@ class OnigiriDesktop(tk.Tk):
             issues=self.payroll.check_hours(self.user['userID'],pid)
             if issues:raise ValueError('Correct hours first:\n'+'\n'.join(issues))
             calculation=self.payroll.calculate(self.user['userID'],pid)
-            messagebox.showinfo('Payroll calculated',
-                f'Total pay: {money(calculation.totalAmount)}\nReview and approve separately.',parent=self)
+            self.show_success(f'Payroll calculated. Total pay: {money(calculation.totalAmount)}\nReview and approve separately.')
         self.run_action(compute)
 
     @requires_role('Owner')
@@ -2340,11 +2772,13 @@ class OnigiriDesktop(tk.Tk):
                 ('+ Submit feedback',self.feedback_submit)])
             rows=[asdict(f) for f in self.feedback.view_submitted_feedback(uid)]
         else:
-            self.section('Customer feedback','Review customer submissions',[
+            buttons=self.section('Customer feedback','Review customer submissions',[
                 ('Mark reviewed',self.feedback_review),('View details',self.feedback_details)])
             rows=[asdict(f) for f in self.feedback.view_feedback(uid)]
-        self.table(rows,[('feedbackID','ID'),('customerUsername','Customer'),
+        tree=self.table(rows,[('feedbackID','ID'),('customerUsername','Customer'),
              ('rating','Rating'),('feedbackText','Feedback'),('submissionDate','Submitted'),('status','Status')])
+        if self.user['role']!='Customer':
+            selection_action(buttons[0],tree,lambda r:r['status']=='Submitted',SECONDARY,ACCENT,INK)
 
     @requires_role('Customer')
     def feedback_submit(self):
@@ -2369,10 +2803,11 @@ class OnigiriDesktop(tk.Tk):
 
     @requires_role('Owner', 'Employee')
     def page_trends(self):
-        self.section('Trend dashboard','Three or more distinct activity dates required for a forecast',[
-            ('Sales forecast',lambda:self.trend_show('Sales')),
-            ('Revenue forecast',lambda:self.trend_show('Financial')),
-            ('Ingredient forecast',self.trend_ingredient)])
+        self.trend_kind=getattr(self,'trend_kind','Sales')
+        self.trend_buttons=self.section('Trend dashboard','Select a forecast and date range, then Generate.',[
+            ('Sales forecast',lambda:self.select_forecast('Sales')),
+            ('Revenue forecast',lambda:self.select_forecast('Financial')),
+            ('Ingredient forecast',lambda:self.select_forecast('Inventory'))])
         panel=card(self.body,25)
         panel.pack(fill='x')
         tk.Label(panel,text='Predict sales, revenue and ingredient consumption',bg=SURFACE,fg=INK,
@@ -2384,12 +2819,49 @@ class OnigiriDesktop(tk.Tk):
             points=BusinessData(typ,self.db_path).retrieve_data()
             tk.Label(panel,text=f'{typ}: {len(points)} recorded dates',bg=SURFACE,fg=INK,
                      font=(FONT,11),anchor='center',justify='center').pack(fill='x',pady=3)
+        self.trend_start=tk.StringVar(value=getattr(self,'_trend_start',''))
+        self.trend_end=tk.StringVar(value=getattr(self,'_trend_end',''))
+        for label,var in [('Start Date (YYYY-MM-DD, Optional)',self.trend_start),('End Date (YYYY-MM-DD, Optional)',self.trend_end)]:
+            tk.Label(panel,text=label,bg=SURFACE,fg=INK).pack(fill='x',pady=(8,3))
+            ttk.Entry(panel,textvariable=var,font='ShopDropdownFont',style='Search.TEntry',justify='center').pack(fill='x')
+        ingredients=IngredientData.list_ingredients(self.db_path)
+        self.trend_ingredient_choice=tk.StringVar(value=f"{ingredients[0]['ingredientID']}: {ingredients[0]['ingredientName']}" if ingredients else '')
+        self.trend_ingredient_controls=tk.Frame(panel,bg=SURFACE)
+        tk.Label(self.trend_ingredient_controls,text='Ingredient',bg=SURFACE,fg=INK).pack(fill='x',pady=(8,3))
+        SmoothCombobox(self.trend_ingredient_controls,textvariable=self.trend_ingredient_choice,state='readonly',
+            values=[f"{r['ingredientID']}: {title_label(r['ingredientName'])}" for r in ingredients]).pack(fill='x')
+        self.trend_generate_button=action_button(panel,'Generate',self.generate_forecast)
+        self.trend_generate_button.pack(fill='x',pady=(12,0))
+        self.select_forecast(self.trend_kind,clear=False)
+
+    def select_forecast(self,kind,clear=True):
+        self.trend_kind=kind
+        if kind=='Inventory':self.trend_ingredient_controls.pack(fill='x',before=self.trend_generate_button)
+        else:self.trend_ingredient_controls.pack_forget()
+        for value,button in zip(('Sales','Financial','Inventory'),self.trend_buttons):
+            color=ACCENT if value==kind else SECONDARY
+            button_colors(button,color,'white' if value==kind else INK)
+        if clear and getattr(self,'trend_results',None) and self.trend_results.winfo_exists():
+            self.trend_results.destroy();self.trend_results=None
+
+    def generate_forecast(self):
+        if self.trend_kind=='Inventory':
+            raw=self.trend_ingredient_choice.get()
+            if not raw:
+                messagebox.showinfo('No inventory','Create an ingredient first.',parent=self);return
+            self.trend_ingredient(int(raw.split(':')[0]))
+        else:self.trend_show(self.trend_kind)
+
+    def _trend_range(self):
+        self._trend_start=self.trend_start.get().strip() if hasattr(self,'trend_start') else ''
+        self._trend_end=self.trend_end.get().strip() if hasattr(self,'trend_end') else ''
+        return self._trend_start,self._trend_end
 
     @requires_role('Owner', 'Employee')
     def trend_show(self,kind):
         def compute():
             source=BusinessData(kind,self.db_path)
-            history=source.retrieve_data()
+            history=source.retrieve_data(*self._trend_range())
             if len(history)<TrendPrediction.MIN_OBSERVATIONS:
                 messagebox.showinfo('More history needed',
                     'At least three distinct dates of completed-order history are required for this forecast.',parent=self)
@@ -2414,23 +2886,41 @@ class OnigiriDesktop(tk.Tk):
         text=summary or (f'{title}: {prediction.predicted_value:,.2f} for {prediction.prediction_date} - {prediction.generate_trend(history)}' if prediction.predicted_value is not None else 'At least three distinct recorded dates are required for a forecast.')
         tk.Label(self.trend_results,text=text,bg=LIGHT,fg=INK,justify='center',wraplength=700).pack(fill='x',pady=10)
         opened=False
+        table_rows=[{'date':r.get('lastRecordedAt') or r['date'],'value':r['value']} for r in history]
+        for row in table_rows:
+            if len(row['date'])==10:
+                row['date']+=' (Time Not Recorded)'
+        columns=[('date','Recorded date'),('value',ylabel)]
         if prediction.predicted_value is None:
-            self.table(history,[('date','Recorded date'),('value',ylabel)],parent=self.trend_results)
+            self.table(table_rows,columns,parent=self.trend_results)
             return False
         try:
             from matplotlib.figure import Figure
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
             figure=Figure(figsize=(9,4),dpi=100,layout='constrained')
             axis=figure.add_subplot(111)
-            days=[date.fromisoformat(r['date']) for r in history]
+            import matplotlib.dates as mdates
+            def chart_time(raw):
+                parsed=datetime.fromisoformat(raw)
+                return parsed.replace(tzinfo=EST) if parsed.tzinfo is None else parsed.astimezone(EST)
+            days=[chart_time(r.get('lastRecordedAt') or r['date']) for r in history]
             values=[r['value'] for r in history]
             axis.plot(days,values,marker='o',label='Recorded history')
-            axis.plot([days[-1],date.fromisoformat(prediction.prediction_date)],
+            axis.plot([days[-1],chart_time(prediction.prediction_date)],
                 [values[-1],prediction.predicted_value],marker='D',linestyle='--',label='Next-day estimate')
-            axis.set(title=title,ylabel=ylabel,xlabel='Date');axis.legend();axis.grid(alpha=.25)
+            axis.set(title=title,ylabel=ylabel,xlabel='Activity Date / Time (EST) | Daily Totals');axis.legend();axis.grid(alpha=.25)
+            ticks=days[::max(1,(len(days)+5)//6)]
+            if days[-1] not in ticks:ticks.append(days[-1])
+            axis.set_xticks(ticks)
+            axis.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d\n%H:%M',tz=EST))
+            figure.set_facecolor(SURFACE);axis.set_facecolor(SURFACE)
+            axis.tick_params(colors=INK);axis.xaxis.label.set_color(INK);axis.yaxis.label.set_color(INK);axis.title.set_color(INK)
             axis.tick_params(axis='x',labelrotation=30)
             canvas=FigureCanvasTkAgg(figure,master=self.trend_results)
             toolbar=NavigationToolbar2Tk(canvas,self.trend_results,pack_toolbar=False)
+            toolbar._round_radius=6
+            canvas.get_tk_widget()._round_radius=8
+            canvas.get_tk_widget().configure(bg=SURFACE)
             toolbar.update();toolbar.pack(fill='x')
             canvas.draw();canvas.get_tk_widget().pack(fill='both',expand=True)
             self.trend_figure=figure
@@ -2438,24 +2928,25 @@ class OnigiriDesktop(tk.Tk):
         except (ImportError,OSError,RuntimeError,ValueError,tk.TclError) as exc:
             tk.Label(self.trend_results,text=f'Graph unavailable: {exc}. Numerical forecast and history remain available.',
                 bg=LIGHT,fg=MUTED,wraplength=650).pack(fill='x')
-        self.table(history,[('date','Recorded date'),('value',ylabel)],parent=self.trend_results)
+        self.table(table_rows,columns,parent=self.trend_results)
         return opened
 
     @requires_role('Owner', 'Employee')
-    def trend_ingredient(self):
+    def trend_ingredient(self, ingredient_id=None):
         items=IngredientData.list_ingredients(self.db_path)
         if not items:
             messagebox.showinfo('No inventory','Create some ingredients before forecasting.',parent=self)
             return
-        choices=[f"{v['ingredientID']}: {v['ingredientName']}" for v in items]
-        a=self.ask('Select ingredient',[('ingredient','Ingredient',choices[0],'choice',choices)])
-        if not a:return
-        ingredient_id=int(a['ingredient'].split(':')[0])
+        if ingredient_id is None:
+            choices=[f"{v['ingredientID']}: {v['ingredientName']}" for v in items]
+            a=self.ask('Select ingredient',[('ingredient','Ingredient',choices[0],'choice',choices)])
+            if not a:return
+            ingredient_id=int(a['ingredient'].split(':')[0])
         def compute():
             item=next(v for v in items if v['ingredientID']==ingredient_id)
             unit=item['unit'] or 'unit'
             source=IngredientData(ingredient_id,self.db_path)
-            history=source.retrieve_data()
+            history=source.retrieve_data(*self._trend_range())
             if len(history)<TrendPrediction.MIN_OBSERVATIONS:
                 messagebox.showinfo('More consumption history needed',
                     'At least three distinct dates of completed-order ingredient consumption are required.',parent=self)

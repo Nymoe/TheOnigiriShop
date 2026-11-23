@@ -99,6 +99,11 @@ class SortAndDemoTests(unittest.TestCase):
             self.assertTrue(win.recipe_rows[2].winfo_manager())
             win.recipe_sort.set('Price: high to low')
             win.recipe_search.set('')
+            visible=[w for w in win.recipe_rows[1].master.pack_slaves() if w in win.recipe_rows.values()]
+            self.assertEqual(visible,[win.recipe_rows[i] for i in (2,1,3)])
+            win.recipe_sort.set('Name Z–A')
+            visible=[w for w in win.recipe_rows[1].master.pack_slaves() if w in win.recipe_rows.values()]
+            self.assertEqual(visible,[win.recipe_rows[i] for i in (1,2,3)])
             self.assertEqual(win.quantities[1].get(),'2')
             win.submit()
         self.app.after(60,drive)

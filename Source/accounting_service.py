@@ -53,9 +53,12 @@ def post_source_transaction(
     if not rounded.is_finite() or rounded < 0 or monetary_value != rounded:
         raise AccountingError('Financial amounts must be nonnegative and accurate to cents.')
     try:
-        date.fromisoformat(str(when))
+        if len(str(when)) > 10:
+            datetime.fromisoformat(str(when))
+        else:
+            date.fromisoformat(str(when))
     except (ValueError, TypeError) as exc:
-        raise AccountingError('Accounting date must use YYYY-MM-DD format.') from exc
+        raise AccountingError('Accounting date must be an ISO date (YYYY-MM-DD) or timestamp.') from exc
     if not description.strip() or not source_type.strip():
         raise AccountingError('A description and a source are required for financial postings.')
     columns = {row['name'] for row in db.execute('PRAGMA table_info("AccountingTransaction")')}

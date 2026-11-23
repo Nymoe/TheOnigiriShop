@@ -8,7 +8,9 @@ icon = source / 'Assets' / 'onigiri.ico'
 check_build=runpy.run_path(str(source / 'build_safety.py'))['ensure_executable_not_running']
 check_build(Path(DISTPATH) / 'TheOnigiriShop.exe')
 a = Analysis([str(source / 'windows_launcher.py')], pathex=[str(source)],
-    binaries=[], datas=[(str(icon), '.')],
+    binaries=[], datas=[(str(icon), '.'),
+                         (str(source / 'Assets' / 'accessibility.png'), '.'),
+                         (str(source / 'Assets' / 'settings.png'), '.')],
     hiddenimports=['matplotlib.backends.backend_tkagg'],
     hookspath=[], hooksconfig={'matplotlib': {'backends': ['TkAgg']}},
     runtime_hooks=[], excludes=['PyQt5', 'PyQt6', 'PySide2', 'PySide6'])

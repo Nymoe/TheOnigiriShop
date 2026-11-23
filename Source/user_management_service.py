@@ -28,7 +28,7 @@ def _owner(db: sqlite3.Connection, actor_id: int) -> None:
 
 def _account(db: sqlite3.Connection, target_id: int):
     user = db.execute('''SELECT u.userID, u.name, u.username, u.email, u.role,
-                        CASE WHEN u.role='Customer' AND a.loyaltyAccountID IS NOT NULL
+                        CASE WHEN u.role='Customer'
                              THEN CAST(c.customerID AS TEXT) ELSE '—' END AS customerID,
                         u.accountActive, p.profileID, p.phoneNumber, p.dateOfBirth,
                         e.employeeID, o.ownerID
@@ -66,11 +66,12 @@ class UserManagementService:
         try:
             _owner(db, actor_id)
             return [dict(row) for row in db.execute('''
-                SELECT u.userID, e.employeeID, u.name, u.username, u.role,
-                       CASE WHEN u.role='Customer' AND a.loyaltyAccountID IS NOT NULL
+                SELECT u.userID, e.employeeID, o.ownerID, u.name, u.username, u.role,
+                       CASE WHEN u.role='Customer'
                             THEN CAST(c.customerID AS TEXT) ELSE '—' END AS customerID,
                        CASE WHEN u.accountActive=1 THEN 'Active' ELSE 'Inactive' END AS status
                 FROM "User" u LEFT JOIN Employee e ON e.userID=u.userID
+                LEFT JOIN Owner o ON o.userID=u.userID
                 LEFT JOIN Customer c ON c.userID=u.userID
                 LEFT JOIN LoyaltyAccount a ON a.customerID=c.customerID
                 ORDER BY u.userID

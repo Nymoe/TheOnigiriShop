@@ -245,7 +245,7 @@ class LoyaltyUseCaseTests(unittest.TestCase):
         admin = UserManagementService(self.path)
         accounts = {a['userID']: a for a in admin.list_accounts(self.owner)}
         self.assertEqual(accounts[self.owner]['customerID'], '—')
-        self.assertEqual(accounts[self.existing_user]['customerID'], '—')
+        self.assertEqual(accounts[self.existing_user]['customerID'], str(self.existing_customer))
         self.assertEqual(accounts[acc['userID']]['customerID'], str(acc['customerID']))
 
     def test_pending_order_completion_posts_points_once(self):

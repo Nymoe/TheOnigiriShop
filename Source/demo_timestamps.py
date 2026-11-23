@@ -28,7 +28,8 @@ def randomize_new_demo_events(db, before):
     """Run inside the import transaction (or the unpublished complete-demo stage).
 
     Related order consumption, loyalty and Sales share the completion time.
-    Keep the original date prefix so daily reports and forecasts do not change.
+    Keep business date prefixes so daily reports and forecasts do not change.
+    New fictional alerts also receive varied recent dates; real alerts are excluded.
     """
     random=SystemRandom()
     completion={};deliveries={};movements=[];purchases={}
@@ -57,6 +58,8 @@ def randomize_new_demo_events(db, before):
                 try:day=datetime.fromisoformat(str(raw)[:10])
                 except ValueError:continue
                 local=day+timedelta(seconds=seconds)
+                if table=='LowStockAlert':
+                    local=datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(seconds=seconds,days=-random.randrange(1,15))
                 if table=='Order':
                     completion[row['orderID']]=local+timedelta(minutes=random.randrange(5,25))
                 elif table=='InventoryOrder':purchases[row['inventoryOrderID']]=local
