@@ -284,6 +284,21 @@ class InventoryService:
     def suppliers(self) -> list[dict]:
         return self._read('SELECT * FROM Supplier ORDER BY name COLLATE NOCASE')
 
+    def update_supplier(self, supplier_id, name: str, contact_info: str = '', *, user_id) -> None:
+        """Edit the existing supplier without changing links or purchase history."""
+        if not name.strip():
+            raise InventoryError('Supplier name is required.')
+        with transaction(self.db_path) as db:
+            actor=_must_get(db,'User','userID',_ident(user_id,'User ID'))
+            if actor['role'] not in ('Owner','Employee') or not actor['accountActive']:
+                raise InventoryError('Only active staff can modify suppliers.')
+            _must_get(db, 'Supplier', 'supplierID', _ident(supplier_id, 'Supplier ID'))
+            try:
+                db.execute('UPDATE Supplier SET name=?, contactInfo=? WHERE supplierID=?',
+                           (name.strip(), contact_info.strip(), supplier_id))
+            except sqlite3.IntegrityError as exc:
+                raise InventoryError('That supplier already exists.') from exc
+
     def receive_delivery(self, quantities: dict[int, float], user_id: int,
                          supplier_id: int | None = None,
                          purchase_order_id: int | None = None,
@@ -525,7 +540,7 @@ class InventoryService:
         elif not db.execute('''SELECT 1 FROM LowStockAlert WHERE ingredientID=?
                                AND status IN ('Open','Reviewed') LIMIT 1''', (ingredient_id,)).fetchone():
             db.execute('INSERT INTO LowStockAlert(createdAt, status, ingredientID) VALUES(?,?,?)',
-                       (_date_today(), "Open", ingredient_id))
+                       (_today(), "Open", ingredient_id))
 
     def alerts(self, active_only: bool = True) -> list[dict]:
         where = "WHERE a.status IN ('Open','Reviewed')" if active_only else ""

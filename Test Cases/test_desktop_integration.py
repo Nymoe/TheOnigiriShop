@@ -80,7 +80,10 @@ class DesktopIntegrationTests(unittest.TestCase):
         data = dict(name='Walk In', email='walkin@example.test', phone='', username='', password='')
         with patch.object(self.app, 'ask', return_value=data):
             self.app.register_walkin()
-        text = self.showinfo.call_args.args[1]
+        self.assertFalse(self.showinfo.called)
+        with patch.object(self.app,'details_dialog') as details:
+            self.app._success_details()
+        text = details.call_args.args[1]
         username = text.split('Username: ')[1].split('\n')[0]
         password = text.split('Password: ')[1].split('\n')[0]
         user = self.app.svc.login(username, password)
@@ -131,7 +134,7 @@ class DesktopIntegrationTests(unittest.TestCase):
             self.app.adjust_stock()
         self.assertEqual(self.stock(), 995)
         self.assertEqual(self.entries(), [])
-        self.assertIn('No financial entry', self.showinfo.call_args.args[1])
+        self.assertIn('No financial entry', self.app._success_message)
         data['amount'] = '7.25'
         with patch.object(self.app, 'ask', return_value=data):
             self.app.adjust_stock()
@@ -151,7 +154,7 @@ class DesktopIntegrationTests(unittest.TestCase):
             self.app.receive_stock()
         self.assertEqual(self.stock(), 1005)
         self.assertEqual(self.entries(), [])
-        self.assertIn('No financial Purchase', self.showinfo.call_args.args[1])
+        self.assertIn('No financial Purchase', self.app._success_message)
         data.update(qty='10', amount='12.50', reference='INV-1')
         with patch.object(self.app, 'ask', return_value=data):
             self.app.receive_stock()
@@ -196,6 +199,9 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertEqual(self.app.loyalty.retrieve_customer_account(cid)['pointsBalance'], 240)
         text = self.askyesno.call_args.args[1]
         self.assertIn('Net sale: $5.00', text)
+        self.assertEqual(len([w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]), 0)
+        self.assertIn('Order completed',self.app._success_message)
+        self.app._success_details()
         self.assertEqual(len([w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]), 1)
         self.checkout(oid, reward)
         self.assertEqual(self.stock(), 970)
@@ -240,6 +246,9 @@ class DesktopIntegrationTests(unittest.TestCase):
         with patch.object(self.app, 'ask', return_value=dict(cid=str(self.customer), order=str(oid), reward='', eligible='')):
             self.app.record_loyalty()
         self.assertEqual(len(self.entries('Order')), 1)
+        self.assertEqual(len([w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]), 0)
+        self.assertIn('Loyalty points',self.app._success_message)
+        self.app._success_details()
         self.assertEqual(len([w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]), 1)
 
     def test_payroll_paid_once_and_approved_hours_are_protected(self):

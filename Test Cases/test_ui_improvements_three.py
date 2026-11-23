@@ -65,7 +65,7 @@ class ImprovementsThreeTests(unittest.TestCase):
         def interact(dialog):
             controls=[]
             def visit(widget):
-                if isinstance(widget,tk.Entry):controls.append(widget)
+                if isinstance(widget,(tk.Entry,ttk.Entry)):controls.append(widget)
                 for child in widget.winfo_children():visit(child)
             visit(dialog)
             self.assertEqual(controls[0].index('insert'),len('Pre-filled'))
@@ -137,7 +137,7 @@ class ImprovementsThreeTests(unittest.TestCase):
                 self.assertEqual(font.Font(font=button.cget('font')).actual('weight'),'normal')
                 self.assertEqual(font.Font(font=self.app.nav_highlight.itemcget(item,'font')).actual('weight'),'bold')
         self.app._position_nav_highlight(end,last.winfo_height());self.app.update_idletasks()
-        with patch.object(self.app,'show_page') as navigate:
+        with patch.object(self.app,'navigate') as navigate:
             self.app._click_nav_highlight(SimpleNamespace(y=last.winfo_height()//2))
             navigate.assert_called_once_with('Inventory')
 
@@ -148,7 +148,7 @@ class ImprovementsThreeTests(unittest.TestCase):
             for child in parent.winfo_children():
                 yield child
                 yield from widgets(child)
-        entry=next(w for w in widgets(self.app.body) if isinstance(w,tk.Entry))
+        entry=next(w for w in widgets(self.app.body) if isinstance(w,(tk.Entry,ttk.Entry)))
         combo=next(w for w in widgets(self.app.body) if isinstance(w,ttk.Combobox))
         self.assertEqual(entry.winfo_height(),combo.winfo_height())
         def inspect(dialog):
@@ -188,35 +188,41 @@ class ImprovementsThreeTests(unittest.TestCase):
             left=int(self.app.tk.call('winfo','rootx',path));top=int(self.app.tk.call('winfo','rooty',path))
             rgb=int(color[1:],16);expected=((rgb>>16)&255)|(rgb&0xff00)|((rgb&255)<<16)
             def pixel(x,y):
-                target=hwnd;point=w.POINT(x,y)
-                if joined:
-                    # Read the control's own native layers, so another application
-                    # passing over the test window cannot corrupt the pixel sample.
-                    for layer in reversed(self.app.tk.call('winfo','children',path)):
+                # Read the control's own native layers, so another application
+                # passing over the test window cannot corrupt the pixel sample.
+                def deepest(parent):
+                    for layer in reversed(self.app.tk.call('winfo','children',parent)):
+                        if not self.app.tk.call('winfo','ismapped',layer):continue
                         lx=int(self.app.tk.call('winfo','rootx',layer));ly=int(self.app.tk.call('winfo','rooty',layer))
                         lw=int(self.app.tk.call('winfo','width',layer));lh=int(self.app.tk.call('winfo','height',layer))
-                        if lx<=left+x<lx+lw and ly<=top+y<ly+lh:
-                            target=int(str(self.app.tk.call('winfo','id',layer)),0)
-                            point=w.POINT(left+x-lx,top+y-ly)
-                            break
+                        if lx<=left+x<lx+lw and ly<=top+y<ly+lh:return deepest(layer)
+                    return parent
+                layer=deepest(path)
+                target=int(str(self.app.tk.call('winfo','id',layer)),0)
+                point=w.POINT(left+x-int(self.app.tk.call('winfo','rootx',layer)),top+y-int(self.app.tk.call('winfo','rooty',layer)))
                 dc=user.GetDC(target)
                 try:return gdi.GetPixel(dc,point.x,point.y)
                 finally:user.ReleaseDC(target,dc)
-            points=((1,0),(width-2,0),(0,1),(width-1,1),
-                        (0,height-2),(width-1,height-2),(1,height-1),(width-2,height-1),
-                        (width//2,0),(width//2,height-1),(0,height//2),(width-1,height//2))
+            # Check straight outlines; SurfaceTests checks antialiased corners.
+            points=((width//2,0),(width//2,height-1),(0,height//2),(width-1,height//2))
             if joined:
                 combo=str(path).removesuffix('.popdown')
                 above=top<int(self.app.tk.call('winfo','rooty',combo))
                 points=[(x,y) for x,y in points if y!= (height-1 if above else 0)]
             for x,y in points:
                 self.assertEqual(pixel(x,y),expected,(path,width,height,x,y,color))
+            entry=THEMES[self.app.theme_name]['ENTRY']
+            rgb=int(entry[1:],16);fill=((rgb>>16)&255)|(rgb&0xff00)|((rgb&255)<<16)
             if joined:
-                entry=THEMES[self.app.theme_name]['ENTRY']
-                rgb=int(entry[1:],16);fill=((rgb>>16)&255)|(rgb&0xff00)|((rgb&255)<<16)
                 seam=height-1 if above else 0;divider=height-2 if above else 1
                 self.assertEqual(pixel(width//2,seam),fill)
                 self.assertEqual(pixel(width//2,divider),expected)
+                selected=int(THEMES[self.app.theme_name]['SELECTED'][1:],16)
+                selected=((selected>>16)&255)|(selected&0xff00)|((selected&255)<<16)
+                self.assertIn(pixel(width//2,2),(fill,selected),'No pale inner border above the options.')
+                self.assertIn(pixel(width//2,height-3),(fill,selected),'No pale inner border below the options.')
+            else:
+                self.assertEqual(pixel(width-14,height-7),fill,'No extra outline beside the arrow.')
         win=tk.Toplevel(self.app);win.geometry('650x400+100+100');win.attributes('-topmost',True)
         self.addCleanup(win.destroy)
         for theme,palette in THEMES.items():
@@ -235,9 +241,19 @@ class ImprovementsThreeTests(unittest.TestCase):
                 self.assertFalse(combo.instate(['hover']))
                 check_border(str(combo),palette['BORDER'])
                 combo.state(['focus'])
+                combo.event_generate('<FocusIn>')
                 check_border(str(combo),palette['ACCENT'])
                 combo.state(['!focus','!active','pressed'])
+                combo.event_generate('<Expose>')
                 check_border(str(combo),palette['ACCENT'])
+                try:
+                    self.app.tk.call('ttk::combobox::Post',str(combo))
+                    check_border(str(combo)+'.popdown',palette['ACCENT'],joined=True)
+                finally:
+                    self.app.tk.call('ttk::combobox::Unpost',str(combo));combo.destroy()
+                from desktop_widgets import SmoothCombobox
+                combo=SmoothCombobox(win,values=[f'Choice {i}' for i in range(count)],height=5,state='readonly')
+                combo.place(x=20,y=20,width=width);combo.current(0);self.app.update()
                 try:
                     self.app.tk.call('ttk::combobox::Post',str(combo))
                     check_border(str(combo)+'.popdown',palette['ACCENT'],joined=True)

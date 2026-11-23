@@ -12,14 +12,30 @@ from statistics import mean
 from inventory_db import connect
 
 
+def filter_history(history, start_date=None, end_date=None):
+    """Inclusive calendar range; blank endpoints leave that side unbounded."""
+    for value in (start_date,end_date):
+        if value:
+            try:
+                if date.fromisoformat(value).isoformat()!=value:raise ValueError
+            except (TypeError,ValueError) as exc:
+                raise ValueError('Use YYYY-MM-DD for the date range.') from exc
+    if start_date and end_date and start_date>end_date:
+        raise ValueError('The start date must be on or before the end date.')
+    return [r for r in history if (not start_date or r['date']>=start_date)
+            and (not end_date or r['date']<=end_date)]
+
+
 class BusinessData:
     def __init__(self, data_type, db_path=None):
         self.data_type = data_type
         self.db_path = db_path
 
-    def retrieve_data(self):
+    def retrieve_data(self, start_date=None, end_date=None):
+        filter_history([],start_date,end_date)
         queries = {
-            "Sales": '''SELECT substr(orderDate, 1, 10) AS day, COUNT(*) AS amount
+            "Sales": '''SELECT substr(orderDate, 1, 10) AS day, COUNT(*) AS amount,
+                               MIN(orderDate) AS first_time, MAX(orderDate) AS last_time
                         FROM "Order" WHERE status='Completed' AND orderDate IS NOT NULL
                         GROUP BY substr(orderDate, 1, 10) ORDER BY day''',
             # The original menu-price total remains in Order. A loyalty purchase
@@ -27,7 +43,8 @@ class BusinessData:
             # forecast uses that net value, matching the automatically posted
             # order Sale, without counting manually entered ledger Sales twice.
             "Financial": '''SELECT substr(o.orderDate, 1, 10) AS day,
-                                   SUM(COALESCE(lt.finalAmount, o.totalAmount)) AS amount
+                                   SUM(COALESCE(lt.finalAmount, o.totalAmount)) AS amount,
+                                   MIN(o.orderDate) AS first_time, MAX(o.orderDate) AS last_time
                             FROM "Order" o
                             LEFT JOIN LoyaltyTransaction lt ON lt.orderID=o.orderID
                             WHERE o.status='Completed' AND o.orderDate IS NOT NULL
@@ -44,8 +61,9 @@ class BusinessData:
                 day = date.fromisoformat(row['day'])
             except (ValueError, TypeError):
                 continue
-            history.append({'date': day.isoformat(), 'value': float(row['amount'])})
-        return history
+            history.append({'date': day.isoformat(), 'value': float(row['amount']),
+                            'firstRecordedAt':row['first_time'],'lastRecordedAt':row['last_time']})
+        return filter_history(history,start_date,end_date)
 
 
 class IngredientData:
@@ -63,11 +81,13 @@ class IngredientData:
                                         reorderLevel, unit FROM InventoryItem
                                  ORDER BY ingredientName, ingredientID''').fetchall()
 
-    def retrieve_data(self):
+    def retrieve_data(self, start_date=None, end_date=None):
+        filter_history([],start_date,end_date)
         with closing(connect(self.db_path)) as db:
             rows = db.execute('''
                 SELECT substr(transactionDate, 1, 10) AS day,
-                       SUM(-quantity) AS amount
+                       SUM(-quantity) AS amount,
+                       MIN(transactionDate) AS first_time, MAX(transactionDate) AS last_time
                 FROM InventoryTransaction
                 WHERE ingredientID = ? AND transactionType = 'Customer Order'
                   AND quantity < 0 AND transactionDate IS NOT NULL
@@ -80,8 +100,9 @@ class IngredientData:
                 day = date.fromisoformat(row['day'])
             except (ValueError, TypeError):
                 continue
-            history.append({'date': day.isoformat(), 'value': float(row['amount'])})
-        return history
+            history.append({'date': day.isoformat(), 'value': float(row['amount']),
+                            'firstRecordedAt':row['first_time'],'lastRecordedAt':row['last_time']})
+        return filter_history(history,start_date,end_date)
 
 
 class TrendPrediction:

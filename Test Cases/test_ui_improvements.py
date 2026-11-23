@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 try:
     import tkinter as tk
+    from tkinter import ttk
 except ImportError as exc:
     raise unittest.SkipTest('Tkinter required') from exc
 from desktop_app import OnigiriDesktop
@@ -104,10 +105,14 @@ class ImprovementsTests(unittest.TestCase):
             with patch('inventory_service._today',return_value=day+'T12:00:00'),patch('inventory_service._date_today',return_value=day):
                 oid=self.app.svc.create_customer_order({rid:1},self.owner)
                 self.app.svc.complete_customer_order(oid,self.owner)
-        self.app.show_page('Trends');self.app.update()
+        self.app._use_theme('Midnight');self.app.show_page('Trends');self.app.update()
         before=self.app.db_path.read_bytes()
         self.app.trend_show('Sales');self.app.update()
         self.assertEqual(len(self.app.trend_figure.axes[0].lines),2)
+        from appearance_preferences import THEMES
+        surface=THEMES['Midnight']['SURFACE']
+        self.assertEqual(self.app.trend_figure.canvas.get_tk_widget().cget('bg'),surface)
+        self.assertEqual(ttk.Style(self.app).lookup('POS.Treeview','lightcolor'),surface)
         self.assertEqual(len(self.app.data_tree.get_children()),3)
         self.assertFalse(any(isinstance(c,tk.Toplevel) for c in self.app.winfo_children()))
         self.assertEqual(self.app.db_path.read_bytes(),before)

@@ -122,7 +122,7 @@ TheOnigiriShop-main/
     TheOnigiriShop.exe          Windows application
     README.md                  Setup and usage
     Source/                    All Python application modules
-        Assets/onigiri.ico     Desktop and executable icon
+        Assets/                Application and white accessibility/settings icons
     Data/                      Persistent databases, including personal copies
         btm495.db              Default shared restaurant database
     Backups/                   Backups for databases in this project's Data folder
@@ -135,7 +135,8 @@ TheOnigiriShop-main/
 |---|---|
 | `Source/inventory_cli.py`, `Tools/START_HERE.bat` | CLI entry point and Windows launcher |
 | `Source/desktop_app.py`, `Tools/START_DESKTOP.bat` | Desktop interface and launcher |
-| `Source/desktop_widgets.py`, `Source/appearance_preferences.py`, `Source/windows_icons.py`, `Source/Assets/onigiri.ico` | Desktop controls, colour schemes, preferences and icons |
+| `Source/desktop_widgets.py`, `Source/desktop_icons.py`, `Source/appearance_preferences.py`, `Source/windows_icons.py`, `Source/Assets/` | Desktop controls, colour schemes, preferences and icons |
+| `Source/desktop_preferences.py`, `Source/desktop_accessibility.py` | Account-specific accessibility, quick actions and Windows accessibility tools |
 | `Source/desktop_details_service.py`, `Source/desktop_demo_service.py` | Record detail views and the complete demo workflow |
 | `Source/inventory_service.py`, `Source/inventory_db.py` | Shared inventory/order rules, connections and compatible schema initialization |
 | `Source/profile_service.py`, `Source/user_management_service.py` | Profiles and account management |
@@ -354,7 +355,7 @@ Use **16 — View transaction history** to review the **40 most recent** invento
 
 After signing in as an **Owner**, enter **20** to display the User Management submenu. It **stays open** until you select **0 — Return to main menu**, so you can work on several users without starting again.
 
-The user list and individual account details show a **Customer ID** column. It displays `—` for Owners, Employees and Customers who have not yet enrolled in loyalty. This is intentionally different from **User ID**: each User is assigned a User ID, and every Customer subtype has a database Customer ID, but the owner user-list column only shows that Customer ID once loyalty is enrolled. To see **all** customers, including unenrolled accounts and their Customer IDs, use **5 → 9**.
+The CLI user list shows each Customer's **Customer ID**, including before loyalty enrollment, and `—` for Owners and Employees. Every login has a separate **User ID**; these identifiers are not interchangeable. Desktop account details show Customer ID, Employee ID or Owner ID according to the user's role. To list all customers and their loyalty enrollment/status, use **5 → 9**.
 
 | Choice | Owner action | What changes |
 |---|---|---|
@@ -571,9 +572,8 @@ existing `Customer.customerID`, has an integer `feedbackID`, a stable
 integer rating, an ISO-8601 `submissionDate`, and a `Submitted`/`Reviewed`
 status. A customer's login ID and Customer ID are different identifiers:
 `FeedbackService` resolves the latter from the signed-in user and verifies
-permissions on every operation. Account management continues to show its
-loyalty-related Customer ID only for loyalty-enrolled accounts; this does not
-prevent other customers from submitting feedback. Existing user, profile,
+permissions on every operation. Account management shows the Customer ID even
+before loyalty enrollment, and unenrolled customers can submit feedback. Existing user, profile,
 inventory, ordering, accounting, loyalty, payroll and trend tables remain intact. Input problems are explained, and a failed database write is
 rolled back so the customer can retry. A feedback status update is likewise
 transactional.
@@ -834,16 +834,68 @@ third-party runtime package is required.
 - The app starts full screen. **F11** toggles full screen; **Escape** returns to a
   regular window. **Log out** and **Exit** are together at the top right.
 - Staff use a scrolling sidebar for Dashboard, Inventory, Recipes, Orders,
-  Suppliers, Purchase orders, Alerts, Inventory history, Loyalty, Feedback, and Trends. My profile and Settings are pinned beneath the account name at the bottom left. Owners additionally have Accounting, Payroll, Users,
+  Suppliers, Purchase orders, Alerts, Inventory history, Loyalty, Feedback, and Trends. My profile is pinned beneath the account name at the bottom left, above equally sized white accessibility (left) and settings (right) icon buttons. The buttons have matching gaps and bottom margin. Owners additionally have Accounting, Payroll, Users,
   and Demo & backups. Customers have Dashboard, their own Loyalty and Feedback,
   My profile, and Settings. They cannot access administrative screens or actions.
 - Main tables have search, column filters, sorting and horizontal/vertical scrolling.
   Click a heading to sort, select a row to prefill an action's ID, or double-click
   a row to inspect its displayed values. Long forms scroll and have Save/Cancel
   controls. Closing or cancelling an unfinished form discards that form's input.
+- Successful saves appear in a compact, dismissible green confirmation bar beneath
+  the clock at the top left, including after the page refreshes. It uses the empty
+  heading area on wide screens; compact windows reserve its space in advance.
+  Login also has a permanent confirmation slot. Showing or hiding a confirmation
+  does not move the menu or page content. Settings, orders, inventory,
+  purchasing, profiles, accounts, loyalty, payroll, accounting, feedback, imports,
+  backups, resets and restores use this confirmation instead of a success pop-up.
+  The bar starts a short fade-out automatically after five seconds. A new
+  confirmation restarts the timer; Dismiss can close it sooner. Reduced motion
+  hides it after five seconds without animation. Logging out clears it.
+  Errors and approval/confirmation prompts still use dialogs.
+  **View Receipt** opens a saved order/loyalty receipt when requested. For a newly
+  registered walk-in, use **View Credentials** within five seconds, before the confirmation closes;
+  the credentials are shown once and are not printed or narrated in the green bar.
 - **Settings → Save colour scheme** selects Classic, Sage, Ocean, Midnight, McDonald's, Starbucks or Tim Hortons.
   Preferences are saved per User ID in the additive `DesktopAppearance` table.
-  Login always uses Classic. This table does not modify core business records.
+  Login uses Classic with separately saved guest accessibility options. These preferences do not modify core business records.
+- **Settings > Reorder quick actions** lets each account move dashboard actions up or down. Only actions permitted for the current role appear. Quick actions also scroll the sidebar to reveal the selected page on smaller screens.
+
+### Accessibility and keyboard controls
+
+Open the bottom-left **accessibility person icon**, **Settings > Accessibility options**, or **Accessibility** on the login screen.
+Choose text size (100%, 115%, 130% or 150%), Standard, Colourblind Friendly or High
+Contrast colours, a standard/crosshair/hand cursor, and reduced animations.
+Settings are saved separately for each account in the additive `DesktopPreferences`
+table; login accessibility has its own guest preference. Larger fonts apply to forms,
+tables and dropdown options, with scrolling for long forms. Status text remains
+available alongside colour cues. Rounded checkboxes have clear ticks and labels
+that scale together with the selected text size. **Settings > Read this page aloud** reads visible
+page labels. Optional focus narration reads focused controls and selected table rows.
+Speech uses Windows' installed speech support and excludes password values, even
+while a password is visible.
+
+The accessibility window also opens Windows **Magnifier**, **Narrator**, and
+**On-Screen Keyboard**. Those tools use the operating system's own settings; the
+app does not change system accessibility preferences. On other operating systems,
+use the platform's accessibility tools and screen reader. Tk control exposure to
+external screen readers depends on the operating system and reader; built-in focus
+speech is also available on Windows.
+
+| Keys | Action |
+|---|---|
+| Tab / Shift+Tab | Move keyboard focus; scrolling forms follow focus |
+| Enter / Space | Activate the focused control; Enter opens a selected table row |
+| Ctrl+1 | Dashboard |
+| Ctrl+, | Settings, or accessibility options before login |
+| Ctrl+F | Focus the current table search |
+| Ctrl++ / Ctrl+- | Increase / decrease saved text size |
+| Ctrl+Shift+R | Read the focused control aloud |
+| Ctrl+Shift+S | Stop speech |
+| F11 / Escape | Toggle full screen / return to a regular window |
+
+Password fields have an **eye icon**: click once to show the password and again to
+hide it. Tab to the icon and press Enter or Space to toggle it with the keyboard.
+The password text remains centred across the full field. Password spaces are preserved.
 
 ### Desktop workflows
 
@@ -851,15 +903,16 @@ third-party runtime package is required.
 |---|---|
 | Orders | Create a graphical cart and save it as Pending, optionally linked using a Customer User ID. Select **Complete order** separately; only completion deducts stock. **Assign customer**, **Cancel order** and **View order lines** are also available. |
 | Loyalty checkout | An unenrolled linked Customer can be enrolled before completion. Applicable rewards are filtered by balance and order amount. Review the discount, net Sale and points before confirming. Stock, status, loyalty and Sale commit together through the shared services. Cancellation leaves the order Pending. |
-| Loyalty | Staff can list/find customers, enroll accounts using their **User ID**, register walk-ins, view balances/history and process older completed orders once. Walk-in registration displays the username and entered/generated password once; give them to the customer. All customer forms accept **User IDs**, while records retain their separate Customer IDs internally. Owners also manage rewards and loyalty status. |
-| Inventory | View stock and LOW/OK status, add ingredients, set thresholds, adjust quantities or receive stock. An optional adjustment value creates a linked Inventory Adjustment; blank values never create financial amounts. |
+| Loyalty | Staff can list/find customers, enroll accounts using their **User ID**, register walk-ins, view balances/history and process older completed orders once, including orders with recorded times. Later loyalty processing updates the existing net Sale without deducting inventory again. After walk-in registration, choose **View Credentials** in the green confirmation bar to display the username and entered/generated password once; give them to the customer before dismissing the confirmation. All customer forms accept **User IDs**, while records retain their separate Customer IDs internally. Owners also manage rewards and loyalty status. |
+| Inventory | View stock and LOW/OK status, add ingredients, set thresholds, adjust quantities or receive stock. Selecting an inventory row prefills its Ingredient ID for Adjust Stock and Receive Stock, with the quantity field ready for typing. An optional adjustment value creates a linked Inventory Adjustment; blank values never create financial amounts. |
 | Deliveries | Enter the ingredient, quantity, optional supplier/PO, optional invoice amount and reference. Manual receiving under Inventory records one ingredient per action; PO receiving collects all delivered ingredient quantities and one optional invoice in a single receipt. Never repeat a whole invoice on each line. PO validation and partial-delivery rules use the existing service. Without an amount, stock still updates and the app explains that no Purchase was posted. |
+| Suppliers | Select a supplier, then use **Modify supplier details** to edit its name/contact information without replacing its ID or history. **Set supplied ingredient** also defaults to the selected supplier. |
 | Purchase orders | Choose a supplier and ingredients from dropdowns showing current stock and LOW STOCK tags; enter quantities and optional unit costs. Inspect order lines and outstanding quantities, then receive selected orders with one quantity per ingredient and an optional invoice. Creating the PO does not increase inventory. |
-| Users | Owners create, inspect, edit, enable/disable, reset passwords, change roles or delete unused accounts. Editing supports username, date of birth and clearing optional fields. Historical dependencies prevent unsafe deletion/role changes. Employee IDs are distinct from User and Customer IDs. |
+| Users | Owners create, inspect, edit, enable/disable, reset passwords, change roles or delete unused accounts. Editing supports username, date of birth and clearing optional fields. Historical dependencies prevent unsafe deletion/role changes. User details show Customer ID, Employee ID or Owner ID according to the account role; these IDs remain distinct from User IDs. Customer IDs are visible even before loyalty enrollment. |
 | Payroll | Set employee rates, open a period, enter hours, review saved entries, calculate, approve, view stubs and mark Paid. Eligible employees are listed alphabetically. Use **Add** to stage each employee's hours, then **Save** to commit the entire batch together; Cancel discards unsaved entries. Payroll entries show employee names beside Employee IDs. A Draft payroll is validated before hour entry; eligible employees need a positive rate. Approved/Paid runs cannot be edited. Payment records one linked Expense and does not transfer money. |
 | Accounting | View/add/edit permitted entries, reconcile, review/resolve discrepancies and inspect reconciliation history. **Review historical order sales** combines the order list and selection in one window before importing; check manual Sales first to avoid duplicate revenue. Sample accounting imports remain optional and Owner-authorized. |
 | Feedback | Customers submit text with an optional 1–5 rating and view only their own submissions. Staff review all submissions and mark them Reviewed. Loyalty enrollment is not required. |
-| Trends | Sales, revenue and ingredient forecasts show numerical results and an embedded Matplotlib graph with the recorded-history table directly below it. Forecasts still average the latest three recorded dates. Ingredient reports use the ingredient's actual unit and include stock/reorder levels, seven-day estimates and coverage assumptions. Missing history or graph support produces an explanatory message. Viewing trends changes no business history. |
+| Trends | Select Sales, Revenue or Ingredient, optionally set an inclusive date range, then press Generate. Forecasts show numerical results and an embedded Matplotlib graph with the recorded-history table directly below it. Forecasts still average the latest three recorded dates. Ingredient reports use the ingredient's actual unit and include stock/reorder levels, seven-day estimates and coverage assumptions. Missing history or graph support produces an explanatory message. Viewing trends changes no business history. |
 | Demo & backups | Owners can load the **complete demo** or individual sample datasets, or create a backup. The complete demo includes fictional accounts, loyalty histories/redemptions, feedback, purchasing, stock alerts, payroll runs and a positive sample ledger balance. It is staged, checked, backed up and applied once without duplicating a repeated import. Imports preserve existing repeat-safety and authorization checks. **Reset business data**, **Factory reset** and **Restore backup** are also available here. They require Owner password verification, typed RESET/RESTORE confirmation, and automatic safety backups. The session returns to login after replacement. |
 
 Both interfaces continue using the existing accounting schema compatibility logic
@@ -869,17 +922,34 @@ when replacing source files.
 
 ### Display and record details
 
+Cards, action buttons, text fields, dropdowns, table/list containers, record panels
+and navigation highlights use softly rounded corners across the desktop interface.
+Windows controls retain their native input, focus and selection behaviour; rounding
+uses small antialiased corner images with borders of consistent thickness, without
+adding a UI dependency. Cards use the same blended corners and straight borders.
+Joined dropdowns keep the shared
+field/list seam square while rounding their exposed outer corners.
+Button corners remain rounded during mouse presses and keyboard activation.
+Popup details use themed text panels and rounded notebook tabs. Table headers,
+hovered/selected rows and focus outlines follow consistent rounded edges, including
+after scrolling or changing selection. Dashboard feedback and quick-action panels
+align with the outside edges of its metric cards.
+
 Navigation uses compact, left-aligned module labels and a smoothly sliding,
 full-row selection highlight with a light accent edge in every colour scheme. Menu
 labels stay in place; the moving highlight reveals bold text from the top or bottom
-as it passes, rather than carrying a duplicate label. Account name, role,
-username, My profile and Settings remain at the bottom left. The header has a live
+as it passes, rather than carrying a duplicate label. Navigation starts the animation
+before loading the selected page's data. Account name, role,
+username, My profile and the accessibility/settings icons remain at the bottom left.
+Forms are laid out and centred before appearing, including with larger text. The header has a live
 clock in **EST (UTC-05:00)**. Table dates use **MM-DD-YYYY HH:MM:SS EST**.
 Historical date-only values display local midnight because no time was recorded;
 stored dates remain unchanged. Table headings and values are centered in equal-width
 columns. Scrollbars appear only when content overflows and use slim, rounded thumbs
 without arrow buttons. Dropdowns use flat, theme-aware fields, chevrons, and complete accent outlines on hovered fields and their open lists, while
-preserving keyboard selection and type-ahead behavior. Hovering anywhere over a
+preserving keyboard selection and type-ahead behavior. Opening a dropdown keeps
+the field's theme background and text colour, without highlighting its current text.
+Hovering anywhere over a
 dropdown, including its text and arrow, smoothly fades the full outline in and out.
 Open dropdowns retain their accent outline. Selecting an option or moving away
 fades it out; retained keyboard focus does not keep the hover outline on.
@@ -888,18 +958,50 @@ drawing to keep wide selectors, including Settings, responsive. Open lists align
 with the field's outer edges and share a single thin divider, whether they open
 above or below the field. Dropdown fields and options share 12-point Segoe UI text
 and aligned left padding. Option rows are at least 32 pixels tall for easier selection;
-other application text sizes are unchanged. Arrow keys, Enter, Escape, Tab, type-ahead,
+the default size is retained elsewhere unless a larger accessibility text size is selected. Search fields and dropdowns have matching heights, fonts and theme colours, including Midnight. Dropdown choices and sort selectors use readable title-style labels; stored values are unchanged. Arrow keys, Enter, Escape, Tab, type-ahead,
 mouse selection and list scrolling remain available.
+Update Alert Status, Mark Reviewed and Resolve Selected Discrepancy are enabled and
+fade to the theme accent only for eligible selected rows. Their transitions match
+the dropdown fade; reduced motion applies to both. Filtering away a selection
+disables the action. Discrepancy action and Close buttons have equal widths.
+Restore Backup and Reset Business Data share the secondary button colour in every
+theme. Factory Reset remains red in every theme. Reset/restore actions are ordered
+Restore Backup, Reset Business Data, Factory Reset.
+
+My Profile presents labelled information rows with separators and read-only username
+and role, plus Edit Profile.
+
 Filters retain all valid
 status choices even when no matching records exist and explain empty results.
 
 New demo imports use varied fictional business-hour times for orders, stock events,
 accounting, loyalty and feedback. Linked order consumption and Sales share a completion
-time, and calendar dates and daily forecast totals stay the same. Demo payroll rows
+time, and daily forecast totals stay the same. New demo alerts receive varied recent
+fictional dates and times; existing real alerts are excluded. Demo payroll rows
 also show a time, stored separately in the optional `Payroll.payTime` column so pay
 date validation and pay calculations remain unchanged. Existing rows and previously
 imported datasets are not retimed by reloading them; repeat-safe imports still skip
 data already loaded. Birthdays remain calendar dates.
+Alerts display their creation date and time. New real alerts record their actual
+creation timestamp. Demo imports randomize only newly imported fictional alert dates and event
+times; real historical alerts and older unidentifiable records are preserved.
+Date-only historical values are not evidence of an actual midnight event.
+
+Trends has Sales, Revenue and Ingredient selectors, optional inclusive **Start Date**
+and **End Date** fields (YYYY-MM-DD), and a **Generate** button. The ingredient label
+and selector appear only for Ingredient forecasts. The accent follows the selected forecast; changing forecast clears the
+previous result until Generate is pressed. Empty dates include all available
+history. Reversed or invalid ranges are rejected. The forecast still averages the
+last three recorded days within the selected range; it needs three distinct days.
+The history table shows **Recorded Date** and the original daily value: completed
+orders, net revenue or ingredient consumption. Recorded Date displays the actual
+latest recorded timestamp within that day's total, in EST, without adding columns.
+Older date-only records show **Time Not Recorded** instead of an assumed midnight.
+Graph points use the recorded
+activity time for each day's total. The next-day estimate is a
+calendar-day forecast. Missing historical times are not invented; dates without
+activity are not treated as zero. Forecasting is read-only.
+
 Inventory history and Accounting default to newest transaction first; column headings still sort.
 New manual accounting entries record the current EST time on the selected date;
 explicit timestamps are preserved, including when editing an entry. Existing
